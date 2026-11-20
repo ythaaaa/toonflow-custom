@@ -162,6 +162,7 @@ export async function refreshToonflowProvider() {
 type ResolvedAiModel = { providerId: string; providerLabel: string; modelId: string; routeId?: string; label: string; contextWindow: number; reasoningLevels: ThinkingLevel[] };
 const availableModels = ref<ResolvedAiModel[]>([]);
 export const modelChoices = computed(() => availableModels.value.map(model => ({ ...model, value: getNodeModelKey(model) })));
+export const localCodexModelChoice = { providerId: "localCodex", providerLabel: "本机 Codex Bridge", modelId: "codex", label: "本机 Codex", contextWindow: 262144, reasoningLevels: [] as ThinkingLevel[], value: JSON.stringify(["localCodex", "codex"]) };
 
 function applyModelReasoning(models: ResolvedAiModel[]) {
   availableModels.value = models;

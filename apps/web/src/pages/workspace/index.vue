@@ -25,7 +25,8 @@
         :fileAction="performFileAction"
         :saveNode="saveDocumentNode" />
     </keep-alive>
-    <workspaceMenu class="workspaceMenu" @openSettings="settingsVisible = true" />
+    <dramaCenter v-if="activePanel === 'drama'" class="dramaPanel" @returnWorkspace="switchPanel('canvas')" />
+    <workspaceMenu class="workspaceMenu" @openSettings="settingsVisible = true" @openDrama="switchPanel('drama')" />
     <div class="workspaceTools">
       <el-segmented :modelValue="activePanel" class="panelSwitcher" :options="panelOptions" size="small" aria-label="切换面板" @change="switchPanel">
         <template #default="{ item }">
@@ -146,10 +147,11 @@ import canvasPanel from "./panels/canvas/canvasHost.vue";
 import type { DocumentNodeOptions } from "./panels/canvas/canvasFiles";
 import workspaceMenu from "./components/workspaceMenu.vue";
 import floatingAgent from "./components/floatingAgent.vue";
+import dramaCenter from "@/pages/drama/index.vue";
 
 const documentPanel = defineAsyncComponent(() => import("./panels/document/index.vue"));
 
-const activePanel = ref<"canvas" | "document">("canvas");
+const activePanel = ref<"canvas" | "document" | "drama">("canvas");
 const selectedTool = ref<"move" | "hand">("move");
 const sideButtonEvents = ["mousedown", "mouseup", "auxclick"] as const;
 // 鼠标侧键会直接触发原生历史导航，需在 DOM 事件阶段拦截，避免生成中的工作区被误关闭。
@@ -168,6 +170,7 @@ useProviderBalances();
 const panelOptions = [
   { label: "画布", value: "canvas", icon: IconVector },
   { label: "文档", value: "document", icon: IconFileText },
+  { label: "短剧", value: "drama", icon: IconFileText },
 ];
 const agentVisible = ref(true);
 const agentWidth = ref(0);
@@ -303,13 +306,13 @@ onBeforeRouteLeave(async () => {
 });
 
 async function switchPanel(value: string | number | boolean) {
-  if (value !== "canvas" && value !== "document") return false;
+  if (value !== "canvas" && value !== "document" && value !== "drama") return false;
   try {
     if (activePanel.value === "document") await documentPanelRef.value?.flushSave();
     const changed = activePanel.value !== value;
     activePanel.value = value;
     await nextTick();
-    if (changed) anonymousData.track(value === "canvas" ? "workspace.canvas" : "workspace.document");
+    if (changed && value !== "drama") anonymousData.track(value === "canvas" ? "workspace.canvas" : "workspace.document");
     return true;
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "文本保存失败");
@@ -395,6 +398,12 @@ function saveDocumentNode(directory: string, canvasPath: string, nodeId: string,
       visibility: hidden;
       pointer-events: none;
     }
+  }
+
+  .dramaPanel {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
   }
 
   .workspaceMenu {

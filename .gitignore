@@ -30,3 +30,7 @@ Thumbs.db
 *.keychain
 *.keychain-db
 .tmp/
+/codexBridge/bridge.pid
+/.m12-deploy-backup-20261121/
+/.m2-backup-20261121/
+/codexMcpTools.jsonl

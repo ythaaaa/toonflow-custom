@@ -1,5 +1,7 @@
 <template>
   <div class="agentConversation">
+    <localCodexConversation v-if="selectedModelChoice?.providerId === 'localCodex'" v-model:selectedModel="selectedModel" :directory="directory" />
+    <template v-else>
     <messageList
       :messages="messages"
       :directory="directory"
@@ -57,6 +59,7 @@
       :contextWindow="contextWindow"
       @submit="submitMessage"
       @stop="stopMessage" />
+    </template>
   </div>
 </template>
 
@@ -73,7 +76,7 @@ import { onAgentStopped, stopAgent } from "@/lib/agentControl";
 import { writeClipboardText } from "@/lib/clipboard";
 import { showNotification } from "@/lib/notification";
 import anonymousData from "@/lib/anonymousData";
-import { modelChoices, refreshModelChoices } from "@/stores/settings";
+import { localCodexModelChoice, modelChoices, refreshModelChoices } from "@/stores/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { AgentAttachment, AgentConversation, AgentMessage } from "./types";
 import type { AgentEvent, AgentQueue, AgentQueuedMessage } from "@toonflow/server/agent/types";
@@ -82,6 +85,7 @@ import { mentionPlainText } from "./mentionText";
 import type { CanvasContext } from "@toonflow/tool-canvas/runtime";
 import messageList from "./conversation/messageList.vue";
 import messageInput from "./conversation/messageInput.vue";
+import localCodexConversation from "./localCodexConversation.vue";
 
 const props = defineProps<{ active: boolean; initialSession: AgentConversation | null; initialModel?: string; sessionFile?: string; disabled: boolean; branchingId?: string }>();
 const emit = defineEmits<{ session: [file: string]; sent: [prompt: string]; event: [event: AgentEvent]; branch: [message: AgentMessage] }>();
@@ -119,9 +123,10 @@ let connected = false;
 let receivingForwardedStream = false;
 const pendingMessage = props.initialSession?.parentFile ? undefined : workspaceStore.pendingAgentMessage;
 const selectedModel = ref(pendingMessage?.model ?? (props.initialSession?.providerId && props.initialSession.modelId
-  ? JSON.stringify([props.initialSession.providerId, props.initialSession.modelId]) : props.initialModel ?? ""));
+  ? JSON.stringify([props.initialSession.providerId, props.initialSession.modelId]) : props.initialModel ?? localStorage.getItem("toonflowLocalCodexModel") ?? ""));
+watch(selectedModel, value => { if (value === JSON.stringify(["localCodex", "codex"])) localStorage.setItem("toonflowLocalCodexModel", value); else localStorage.removeItem("toonflowLocalCodexModel"); });
 const reasoningEffort = ref(pendingMessage?.reasoningEffort ?? props.initialSession?.thinkingLevel ?? "");
-const selectedModelChoice = useNodeModelSelection(modelChoices, selectedModel);
+const selectedModelChoice = useNodeModelSelection(computed(() => [...modelChoices.value, localCodexModelChoice]), selectedModel);
 const contextWindow = computed(() => contextUsage.value?.contextWindow ?? selectedModelChoice.value?.contextWindow ?? 262144);
 function showSteeringMessage(message: AgentQueuedMessage) {
   if (messages.value.some(item => item.role === "user" && (item.queueId === message.id || item.id === message.id))) return;

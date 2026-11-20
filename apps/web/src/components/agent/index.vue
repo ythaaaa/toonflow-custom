@@ -202,6 +202,7 @@ async function newConversation(source?: { file?: string; message: AgentMessage }
     if (currentRequest !== requestId) return;
     const session = data.data;
     history.value.unshift({ file: session.file, name: session.name, modified: new Date().toISOString(), messageCount: session.messages.length });
+    if (!source && initialModel === JSON.stringify(["localCodex", "codex"])) localStorage.removeItem(`toonflowLocalCodex:${directory}`);
     showConversation(session).initialModel = initialModel;
     initialized.value = true;
   } catch (error) {

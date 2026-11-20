@@ -104,6 +104,7 @@ declare module 'vue' {
     LanguageModel: typeof import('./../components/settings/panels/languageModel/index.vue')['default']
     LanguageSelect: typeof import('./../components/languageSelect.vue')['default']
     LoadingPage: typeof import('./../components/loadingPage.vue')['default']
+    LocalCodexConversation: typeof import('./../components/agent/localCodexConversation.vue')['default']
     MarkdownImage: typeof import('./../components/markdownImage.vue')['default']
     MarketInstallApproval: typeof import('./../components/agent/marketInstallApproval.vue')['default']
     Mcp: typeof import('./../components/settings/panels/mcp/index.vue')['default']

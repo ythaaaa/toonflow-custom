@@ -25,7 +25,7 @@
           <el-select :modelValue="selectedModelChoice ? selectedModel : ''" filterable :disabled="disabled" :teleported="false" placeholder="选择模型" aria-label="选择模型" noDataText="请先在设置中添加模型" @update:modelValue="selectedModel = $event" @change="reasoningEffort = ''">
             <template #prefix><modelIcon v-if="selectedModelChoice" :model="selectedModelChoice.modelId" :size="18" /></template>
             <template #label="{ label }"><modelLabel :label="label" :providerId="selectedModelChoice?.providerId" /></template>
-            <el-option-group v-for="provider in modelGroups" :key="provider.id" :label="provider.label">
+              <el-option-group v-for="provider in modelGroups" :key="provider.id" :label="provider.label">
               <el-option v-for="model in provider.models" :key="model.value" :label="model.label" :value="model.value">
                 <div class="modelOption">
                   <modelIcon :model="model.modelId" :size="16" />
@@ -58,18 +58,19 @@ import { modelIcon } from "@toonflow/model-icons";
 import { useNodeModelSelection } from "@toonflow/nodes-scaffold/nodeAi";
 import modelLabel from "@toonflow/node-shared/modelLabel";
 import type { ThinkingLevel } from "@toonflow/server/modelReasoning";
-import { modelChoices, refreshModelChoices } from "@/stores/settings";
+import { localCodexModelChoice, modelChoices, refreshModelChoices } from "@/stores/settings";
 
 const selectedModel = defineModel<string>({ default: "" });
 const reasoningEffort = defineModel<string>("reasoningEffort", { default: "" });
-const props = withDefaults(defineProps<{ active?: boolean; disabled?: boolean }>(), { active: true, disabled: false });
+const props = withDefaults(defineProps<{ active?: boolean; disabled?: boolean; allowLocalCodex?: boolean }>(), { active: true, disabled: false, allowLocalCodex: false });
 const visible = ref(false);
 const reasoningId = useId();
 const reasoningLabels: Record<ThinkingLevel, string> = { off: "关闭", minimal: "最小", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高" };
-const selectedModelChoice = useNodeModelSelection(modelChoices, selectedModel);
+const choices = computed(() => props.allowLocalCodex ? [...modelChoices.value, localCodexModelChoice] : modelChoices.value);
+const selectedModelChoice = useNodeModelSelection(choices, selectedModel);
 const modelGroups = computed(() => {
   const groups = new Map<string, { id: string; label: string; models: Array<(typeof modelChoices.value)[number]> }>();
-  for (const model of modelChoices.value) {
+  for (const model of choices.value) {
     const group = groups.get(model.providerId);
     if (group) group.models.push(model);
     else groups.set(model.providerId, { id: model.providerId, label: model.providerLabel, models: [model] });
@@ -80,7 +81,7 @@ const reasoningLevels = computed(() => selectedModelChoice.value?.reasoningLevel
 const reasoningOptions = computed(() => [{ label: "默认", value: "" }, ...reasoningLevels.value.map(value => ({ label: reasoningLabels[value], value }))]);
 const reasoningColumns = computed(() => Math.min(4, reasoningOptions.value.length > 4 ? Math.ceil(reasoningOptions.value.length / 2) : reasoningOptions.value.length));
 const reasoningLabel = computed(() => reasoningOptions.value.find(item => item.value === reasoningEffort.value)?.label ?? "默认");
-watch(modelChoices, items => {
+watch(choices, items => {
   if (!selectedModel.value) selectedModel.value = items[0]?.value ?? "";
 }, { immediate: true });
 watch([() => selectedModelChoice.value?.reasoningLevels, reasoningEffort], ([levels, effort]) => {
