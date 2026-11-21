@@ -1,5 +1,5 @@
 <template>
-  <article class="dramaNode" :class="[`role${binding?.role || 'unknown'}`, { selected }]" @click.stop="selectNode">
+  <article class="dramaNode" :class="[`role${binding?.role || 'unknown'}`, { selected }]" @click.stop="selectNode" @dblclick.stop="selectNode">
     <handle
       v-for="(item, index) in handles"
       :id="item.id"
@@ -17,8 +17,8 @@
     </div>
     <img v-if="previewUrl" class="nodeImage" :src="previewUrl" :alt="entity.title" />
     <p v-if="entity.description">{{ entity.description }}</p>
-    <el-button v-if="binding?.role === 'shot' || binding?.role === 'gptImage'" class="openShotButton nodrag nopan" size="small" text type="primary" @click.stop="selectNode">
-      {{ binding.role === "gptImage" ? "打开 GPT 生图" : "查看镜头与生图" }}
+    <el-button v-if="binding && binding.role !== 'imageAsset'" class="openEditorButton nodrag nopan" size="small" text type="primary" @click.stop="selectNode">
+      {{ binding.role === "script" ? "编辑剧本工作稿" : binding.role === "character" ? "编辑人物" : binding.role === "scene" ? "编辑场景" : binding.role === "gptImage" ? "打开 GPT 生图" : "查看镜头与生图" }}
     </el-button>
   </article>
 </template>
@@ -28,7 +28,7 @@ import { computed, inject, onScopeDispose, ref, watch } from "vue";
 import { Handle, Position, useVueFlow, type Connection, type GraphNode, type NodeProps } from "@vue-flow/core";
 import { isTypeCompatible, validateConnection, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
-import { dramaCanvasStateKey, readDramaCanvasBinding, resolveDramaCanvasRelation, type DramaCanvasRole } from "@/lib/dramaCanvas";
+import { dramaCanvasStateKey, dramaCharacterDisplayName, readDramaCanvasBinding, resolveDramaCanvasRelation, type DramaCanvasRole } from "@/lib/dramaCanvas";
 
 const props = defineProps<NodeProps>();
 const flow = useVueFlow();
@@ -53,7 +53,7 @@ const entity = computed(() => {
   }
   if (currentBinding.role === "character") {
     const character = currentProject.characters.find(item => item.id === currentBinding.characterId);
-    return { title: character?.name || "人物已不存在", description: character?.appearance || character?.description || "", imagePath: character?.referencePath || "" };
+    return { title: dramaCharacterDisplayName(character), description: character?.appearance || character?.description || "", imagePath: character?.referencePath || "" };
   }
   if (currentBinding.role === "scene") {
     const scene = episode.scenes.find(item => item.id === currentBinding.sceneId);
@@ -138,6 +138,6 @@ function selectNode() {
   p { margin: 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
   .nodeImage { display: block; width: 100%; max-height: 150px; object-fit: cover; border-radius: 6px; }
   .dramaHandle { width: 10px; height: 10px; border: 2px solid var(--el-color-primary); background: var(--el-bg-color); }
-  .openShotButton { justify-self: start; margin: 0; padding: 0; }
+  .openEditorButton { justify-self: start; margin: 0; padding: 0; }
 }
 </style>

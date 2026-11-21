@@ -1,7 +1,7 @@
 import type { InjectionKey, ShallowRef } from "vue";
 import type { GraphNode } from "@vue-flow/core";
 import type { NodeHandle } from "@toonflow/nodes-scaffold/runtime";
-import type { DramaProject } from "@toonflow/drama-workspace";
+import type { DramaCharacter, DramaProject } from "@toonflow/drama-workspace";
 
 export type DramaCanvasRole = "script" | "character" | "scene" | "shot" | "gptImage" | "imageAsset";
 export type DramaCanvasBinding = {
@@ -27,6 +27,10 @@ export type DramaCanvasRelation = {
 };
 export type DramaCanvasState = { directory: string; manifestPath: string; episodeId: string; project: DramaProject };
 export const dramaCanvasStateKey: InjectionKey<ShallowRef<DramaCanvasState | undefined>> = Symbol("dramaCanvasState");
+
+export function dramaCharacterDisplayName(character: Pick<DramaCharacter, "name"> | undefined) {
+  return character ? character.name?.trim() || "未命名人物" : "人物不存在";
+}
 
 export const dramaNodeHandles: Record<DramaCanvasRole, NodeHandle[]> = {
   script: [{ id: "script", type: "source", dataType: "DRAMA_SCRIPT", label: "正式剧本" }],

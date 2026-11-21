@@ -116,6 +116,12 @@
       :connectedReferenceIds="connectedReferenceIds"
       @saved="refreshDramaCanvasState"
       @assetSaved="addDramaImageAsset" />
+    <dramaCanvasEntityPanel
+      v-if="selectedDramaEntityBinding && dramaCanvasState"
+      :key="dramaCanvasBindingKey(selectedDramaEntityBinding)"
+      :binding="selectedDramaEntityBinding"
+      :state="dramaCanvasState"
+      @saved="refreshDramaCanvasState" />
     <el-dialog v-if="currentUser?.role !== 'user'" :modelValue="!!assetSelection" class="referenceAssetDialog" title="全局素材库" width="min(1200px, 88vw)" alignCenter appendToBody destroyOnClose @update:modelValue="finishAssetSelection()">
       <assetLibrary :modelValue="!!assetSelection" expanded :canSelect="canSelectAsset" :selecting="assetSelecting" @select="selectAsset" />
     </el-dialog>
@@ -202,6 +208,7 @@ import { listDramaProjects, type DramaAsset, type DramaEpisode } from "@/lib/dra
 import { dramaCanvasBindingKey, dramaCanvasStateKey, dramaNodeHandles, readDramaCanvasBinding, resolveDramaCanvasRelation, type DramaCanvasBinding, type DramaCanvasRelation, type DramaCanvasState, type DramaCanvasRole } from "@/lib/dramaCanvas";
 import dramaCanvasNode from "./components/dramaCanvasNode.vue";
 import dramaCanvasShotPanel from "./components/dramaCanvasShotPanel.vue";
+import dramaCanvasEntityPanel from "./components/dramaCanvasEntityPanel.vue";
 import { currentUser } from "@/stores/multiTenant";
 import { generalSettings } from "@/stores/settings";
 import { getShortcutBindings, shortcutLabel, shortcutMatches, shortcutPressed } from "@/lib/canvasShortcuts";
@@ -270,6 +277,13 @@ const selectedDramaBinding = computed(() => {
   for (const node of flow.getSelectedNodes.value.slice().reverse()) {
     const binding = readDramaCanvasBinding(node.data);
     if (binding && (binding.role === "shot" || binding.role === "gptImage")) return binding;
+  }
+  return undefined;
+});
+const selectedDramaEntityBinding = computed(() => {
+  for (const node of flow.getSelectedNodes.value.slice().reverse()) {
+    const binding = readDramaCanvasBinding(node.data);
+    if (binding && (binding.role === "script" || binding.role === "character" || binding.role === "scene")) return binding;
   }
   return undefined;
 });

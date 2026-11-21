@@ -153,6 +153,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
 import dramaTimeline from "@/components/drama/dramaTimeline.vue";
 import gptImageGenerator from "@/components/drama/gptImageGenerator.vue";
+import { dramaCharacterDisplayName } from "@/lib/dramaCanvas";
 import dramaStudioNav from "./dramaStudioNav.vue";
 import codexAssistantPane from "./codexAssistantPane.vue";
 import { createDramaProject, createSeason, listDramaProjects, readEpisodeScript, saveDramaProject, saveEpisodeDraft, saveEpisodeScriptVersion, updateScriptReview, type DramaAsset, type DramaCharacter, type DramaEpisode, type DramaProject, type DramaProductionStatus, type DramaScene, type DramaShot, type DramaStatus, type DramaScriptVersion } from "@/lib/dramaWorkspace";
@@ -246,8 +247,14 @@ const formalVersionLabel = computed(() => formalVersion.value ? `V${String(forma
 const assetSectionLabel = computed(() => assetView.value === "scenesAssets" ? "场景资产" : assetView.value === "props" ? "道具资产" : "图片素材");
 const imageAssets = computed(() => project.value?.assets.filter(item => item.kind === "image") ?? []);
 const gptReferenceOptions = computed(() => [
-  ...(project.value?.characters.filter(item => item.referencePath).map(item => ({ id: item.id, label: `人物 · ${item.name || item.id}`, referencePath: item.referencePath })) ?? []),
-  ...(project.value?.assets.filter(item => item.referencePath && item.kind === "image").map(item => ({ id: item.id, label: `${item.characterId ? "人物" : item.sceneId ? "场景" : "素材"} · ${item.name || item.id}`, referencePath: item.referencePath })) ?? []),
+  ...(project.value?.characters.filter(item => item.referencePath).map(item => ({ id: item.id, label: `人物 · ${dramaCharacterDisplayName(item)}`, referencePath: item.referencePath })) ?? []),
+  ...(project.value?.assets.filter(item => item.referencePath && item.kind === "image").map(item => {
+    const character = item.characterId ? project.value?.characters.find(candidate => candidate.id === item.characterId) : undefined;
+    const label = item.characterId
+      ? `人物 · ${dramaCharacterDisplayName(character)}${item.name ? ` · ${item.name}` : ""}`
+      : `${item.sceneId ? "场景" : "素材"} · ${item.name || item.id}`;
+    return { id: item.id, label, referencePath: item.referencePath };
+  }) ?? []),
 ]);
 const sceneImageAsset = computed(() => {
   if (!sceneDraft.value) return undefined;

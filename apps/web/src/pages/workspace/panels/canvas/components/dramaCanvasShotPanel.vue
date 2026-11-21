@@ -39,7 +39,7 @@ import { ElMessage } from "element-plus";
 import gptImageGenerator from "@/components/drama/gptImageGenerator.vue";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
 import { saveDramaProject, updateShot, type DramaAsset, type DramaShot } from "@/lib/dramaWorkspace";
-import type { DramaCanvasBinding, DramaCanvasState } from "@/lib/dramaCanvas";
+import { dramaCharacterDisplayName, type DramaCanvasBinding, type DramaCanvasState } from "@/lib/dramaCanvas";
 
 type GeneratedImage = { path: string; mimeType: string; prompt: string; aspectRatio: string; referenceAssetIds: string[]; width?: number; height?: number };
 const props = defineProps<{ binding: DramaCanvasBinding; state: DramaCanvasState; connectedReferenceIds: string[] }>();
@@ -67,8 +67,14 @@ const initialGeneratedImage = computed<GeneratedImage | undefined>(() => {
 });
 const generatedPersisted = computed(() => !!generatedPersistedPath.value && props.state.project.assets.some(item => item.shotId === shot.value?.id && item.referencePath === generatedPersistedPath.value));
 const referenceOptions = computed(() => [
-  ...props.state.project.characters.filter(item => item.referencePath).map(item => ({ id: item.id, label: `人物 · ${item.name || item.id}`, referencePath: item.referencePath })),
-  ...props.state.project.assets.filter(item => item.referencePath && item.kind === "image").map(item => ({ id: item.id, label: `${item.characterId ? "人物" : item.sceneId ? "场景" : "素材"} · ${item.name || item.id}`, referencePath: item.referencePath })),
+  ...props.state.project.characters.filter(item => item.referencePath).map(item => ({ id: item.id, label: `人物 · ${dramaCharacterDisplayName(item)}`, referencePath: item.referencePath })),
+  ...props.state.project.assets.filter(item => item.referencePath && item.kind === "image").map(item => {
+    const character = item.characterId ? props.state.project.characters.find(candidate => candidate.id === item.characterId) : undefined;
+    const label = item.characterId
+      ? `人物 · ${dramaCharacterDisplayName(character)}${item.name ? ` · ${item.name}` : ""}`
+      : `${item.sceneId ? "场景" : "素材"} · ${item.name || item.id}`;
+    return { id: item.id, label, referencePath: item.referencePath };
+  }),
 ]);
 const connectedReferenceIds = computed(() => [...new Set([...(shot.value?.referenceAssetIds ?? []), ...props.connectedReferenceIds])]);
 
