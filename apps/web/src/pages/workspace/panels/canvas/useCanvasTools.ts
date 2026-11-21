@@ -10,6 +10,7 @@ import http from "@/lib/http";
 import { confirmPluginInstall } from "@/lib/pluginInstallConfirmation";
 import { openPluginUploadKey } from "@/components/settings/panels/pluginMarket/marketUpload";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { readDramaCanvasBinding, resolveDramaCanvasRelation } from "@/lib/dramaCanvas";
 import { agentNodeToolPermissions } from "@/stores/settings";
 import { arrangeCanvas } from "./arrangeCanvas";
 import { canvasEdgeSummary, canvasNodeSummary, createCanvasQueries, isCanvasRead } from "./canvasQueries";
@@ -254,22 +255,29 @@ export function useCanvasTools(options: {
           if (!flow.nodesConnectable.value || sourceNode.connectable === false || targetNode.connectable === false) {
             throw new Error(`节点不允许连接：${connection.source} -> ${connection.target}`);
           }
+          const sourceBinding = readDramaCanvasBinding(sourceNode.data);
+          const targetBinding = readDramaCanvasBinding(targetNode.data);
+          const dramaRelation = resolveDramaCanvasRelation(sourceNode, targetNode);
+          if ((sourceBinding || targetBinding) && !dramaRelation) throw new Error("短剧节点只支持有效的剧本、场景、人物、镜头和图片关系");
           const existing = edges.find(edge => edge.source === connection.source && edge.target === connection.target
             && edge.sourceHandle === connection.sourceHandle && edge.targetHandle === connection.targetHandle);
-          if (existing) return { id: existing.id, connection, isNew: false };
+          if (existing) return { id: existing.id, connection, isNew: false, existing, dramaRelation };
           if (!validateConnection(connection, { sourceNode, targetNode, nodes: flow.getNodes.value, edges })) {
             throw new Error(`连接无效：${connection.source} -> ${connection.target}，请检查端口方向、数据类型以及目标节点的连接规则`);
           }
           const id = crypto.randomUUID();
           // ACT: 候选边只参与本批校验，全部通过后再一次提交画布。
           edges.push({
-            ...connection, id, type: "default", selected: false, data: {}, events: {}, sourceNode, targetNode,
+            ...connection, id, type: "default", selected: false, data: dramaRelation ? { dramaRelation } : {}, events: {}, sourceNode, targetNode,
             sourceX: sourceNode.computedPosition.x, sourceY: sourceNode.computedPosition.y,
             targetX: targetNode.computedPosition.x, targetY: targetNode.computedPosition.y,
           });
-          return { id, connection, isNew: true };
+          return { id, connection, isNew: true, existing: undefined, dramaRelation };
         });
-        flow.addEdges(entries.filter(entry => entry.isNew).map(entry => ({ id: entry.id, ...entry.connection })));
+        entries.forEach(entry => {
+          if (!entry.isNew && entry.dramaRelation && entry.existing) entry.existing.data = { ...(entry.existing.data ?? {}), dramaRelation: entry.dramaRelation };
+        });
+        flow.addEdges(entries.filter(entry => entry.isNew).map(entry => ({ id: entry.id, ...entry.connection, ...(entry.dramaRelation ? { data: { dramaRelation: entry.dramaRelation } } : {}) })));
         await nextTick();
         return { edges: entries.map(entry => canvasEdgeSummary(flow.findEdge(entry.id)!)) };
       }

@@ -29,8 +29,10 @@ const props = defineProps<{
   prompt: string;
   aspectRatio: string;
   referenceOptions: ReferenceOption[];
+  initialReferenceAssetIds?: string[];
   initialImagePath?: string;
   initialImageLabel?: string;
+  initialGeneratedImage?: GeneratedImage;
   generatedPersisted: boolean;
   saving: boolean;
 }>();
@@ -60,6 +62,16 @@ const referenceOptions = computed(() => [...new Map<string, ReferenceOption>([..
 watch(() => [props.directory, props.initialImagePath, props.initialImageLabel] as const, ([directory, path, label]) => {
   if (!generatedImage.value) void setPreview(path, label || "当前关联图片", directory);
 }, { immediate: true });
+watch(() => props.initialGeneratedImage, image => {
+  if (!image || generatedImage.value?.path === image.path) return;
+  generatedImage.value = image;
+  const dimensions = image.width && image.height ? `${image.width} × ${image.height}` : "生成预览";
+  void setPreview(image.path, `${image.aspectRatio} · ${dimensions}`);
+}, { immediate: true });
+watch(() => [props.initialReferenceAssetIds ?? [], props.referenceOptions.map(item => item.id)] as const, ([ids, availableIds]) => {
+  const available = new Set(availableIds);
+  selectedReferenceIds.value = ids.filter(id => available.has(id));
+}, { immediate: true, deep: true });
 onMounted(refreshStatus);
 onScopeDispose(() => releasePreview?.());
 

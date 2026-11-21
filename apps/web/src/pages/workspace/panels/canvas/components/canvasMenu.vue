@@ -86,7 +86,7 @@ import { providerBalances, refreshProviderBalance } from "@/lib/providerBilling"
 const props = defineProps<{
   directory?: string;
   initialCanvasId?: string;
-  activateCanvas?: (id: string, signal?: AbortSignal) => Promise<void>;
+  activateCanvas?: (id: string, signal?: AbortSignal) => Promise<{ canvasId: string; openDramaCanvas: (target: { projectId: string; episodeId: string }, signal?: AbortSignal) => Promise<string> } | void>;
   flushSave: (action?: () => Promise<void>) => Promise<void>;
 }>();
 const workspaceStore = useWorkspaceStore();

@@ -123,7 +123,7 @@ async function ensureCanvas(fileName: string, signal?: AbortSignal, activate = f
 
 async function activateCanvas(fileName: string, signal?: AbortSignal) {
   if (fileActionBusy) throw new Error("工作区文件正在操作，请稍后重试");
-  await ensureCanvas(fileName, signal, true);
+  return ensureCanvas(fileName, signal, true);
 }
 
 async function focusDocumentNode(directory: string, canvasPath: string, nodeId: string) {
@@ -220,6 +220,13 @@ async function flushSave(action?: () => Promise<void>) {
   // 重命名文件期间暂停所有实例自动保存，目标实例同步新路径后再恢复。
   const run = (index: number): Promise<void> => index < panels.length ? panels[index]!.flushSave(() => run(index + 1)) : action();
   await run(0);
+}
+
+async function openDramaCanvas(target: { projectId: string; episodeId: string }, signal?: AbortSignal) {
+  const callSignal = AbortSignal.any([lifetime.signal, AbortSignal.timeout(120000), ...(signal ? [signal] : [])]);
+  const panel = await waitForControlValue(() => activeInstance.value?.canvasListReady ? activeInstance.value : undefined, callSignal);
+  callSignal.throwIfAborted();
+  return panel.openDramaCanvas(target, callSignal);
 }
 
 function relativePath(path: string) {
@@ -408,6 +415,7 @@ const mentionSource: MentionCanvasSource = {
 };
 
 defineExpose({ canvasId, canvasReady, canvasListReady, getCanvasContext, readDocumentNode, readDocumentNodes, focusDocumentNode, saveDocumentNode, mountDocumentNode, observeDocumentNode, resolveDocumentNodeFile, performFileAction, flushSave, cancelSave,
+  openDramaCanvas,
   addNodeAtPointer: () => activeInstance.value?.addNodeAtPointer(),
   openNodeSearch: () => activeInstance.value?.openNodeSearch(),
   mentionSource,

@@ -25,7 +25,7 @@
         :fileAction="performFileAction"
         :saveNode="saveDocumentNode" />
     </keep-alive>
-    <dramaCenter v-if="activePanel === 'drama'" class="dramaPanel" @returnWorkspace="switchPanel('canvas')" @openCanvas="switchPanel('canvas')" />
+    <dramaCenter v-if="activePanel === 'drama'" class="dramaPanel" @returnWorkspace="switchPanel('canvas')" @openCanvas="openDramaCanvas" />
     <workspaceMenu class="workspaceMenu" @openSettings="settingsVisible = true" @openDrama="switchPanel('drama')" />
     <div class="workspaceTools">
       <el-segmented :modelValue="activePanel" class="panelSwitcher" :options="panelOptions" size="small" aria-label="切换面板" @change="switchPanel">
@@ -317,6 +317,20 @@ async function switchPanel(value: string | number | boolean) {
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "文本保存失败");
     return false;
+  }
+}
+
+async function openDramaCanvas(target: { projectId: string; episodeId: string }) {
+  if (!await switchPanel("canvas")) return;
+  const signal = AbortSignal.timeout(120000);
+  try {
+    const panel = await waitForControlValue(() => canvasPanelRef.value?.canvasListReady ? canvasPanelRef.value : undefined, signal);
+    await panel.openDramaCanvas(target, signal);
+    const context = await waitForControlValue(() => panel.getCanvasContext(), signal);
+    const state = await context.call({ name: "fitCanvas", args: {} }, signal);
+    if (!(state as { fitted?: boolean }).fitted) ElMessage.warning("画布已打开，但当前视口暂未完成适配");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "打开分集制作画布失败");
   }
 }
 
