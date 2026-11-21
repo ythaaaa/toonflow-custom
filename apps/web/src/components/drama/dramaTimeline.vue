@@ -1,13 +1,13 @@
 <template>
   <div class="timelineCanvas">
     <el-empty v-if="!sceneGroups.length" description="当前分集没有场景或镜头" />
-    <section v-for="group in sceneGroups" :key="group.id" class="sceneTrack">
+    <section v-for="group in sceneGroups" :key="group.id" class="sceneTrack" :class="{ dropTarget: dropTargetSceneId === group.id }" @dragover.prevent="setDropTarget(group.id)" @drop.stop.prevent="dropAtEnd($event, group.id)">
       <header class="sceneTrackHeader">
         <div><span class="sceneTrackEyebrow">场景分组</span><h3>{{ group.scene?.heading || "未关联场景" }}<small v-if="group.scene?.archived">已归档</small></h3><p>{{ [group.scene?.location, group.scene?.dayPart, group.scene?.time].filter(Boolean).join(" · ") || "尚无地点和时段信息" }}</p></div>
         <div class="sceneTrackMeta"><span>{{ group.shots.length }} 个镜头</span><el-button v-if="group.scene && !group.scene.archived" size="small" @click="emit('addShot', group.scene.id)">在此场景新增镜头</el-button></div>
       </header>
       <div class="shotTrack" :style="{ '--shotCardWidth': `${Math.round(286 * zoom / 100)}px` }">
-        <article v-for="(shot, index) in group.shots" :key="shot.id" class="timelineShotCard" :class="{ dragging: draggingShotId === shot.id, selected: selectedShotId === shot.id }" draggable="true" @dragstart.stop="startDrag($event, shot)" @dragend="draggingShotId = ''" @dragover.prevent @drop.stop.prevent="dropOnShot($event, shot, group.id)" @click="emit('openShot', shot)">
+        <article v-for="(shot, index) in group.shots" :key="shot.id" class="timelineShotCard" :class="{ dragging: draggingShotId === shot.id, selected: selectedShotId === shot.id }" draggable="true" @dragstart.stop="startDrag($event, shot)" @dragend="clearDrag" @dragover.prevent @drop.stop.prevent="dropOnShot($event, shot, group.id)" @click="emit('openShot', shot)">
           <header class="shotCardHeader"><span class="dragGrip" aria-label="拖动调整镜头顺序">⠿</span><strong>{{ shot.number }}</strong><span class="shotSequence">{{ String(index + 1).padStart(2, "0") }}</span><el-tag size="small" :type="shotImage(shot).path ? 'success' : 'info'">{{ shotImage(shot).path ? "已有分镜图" : "待生图" }}</el-tag></header>
           <div class="shotFrame">
             <img v-if="previewUrls[shot.id]" :src="previewUrls[shot.id]" :alt="`${shot.number} 分镜预览`" loading="lazy" />
@@ -17,7 +17,7 @@
           <footer class="shotCardActions"><el-button size="small" @click.stop="emit('openShot', shot)">详情 / 编辑</el-button><el-button size="small" type="primary" @click.stop="emit('generateShot', shot)">{{ shotImage(shot).path ? "重新生成" : "GPT 生图" }}</el-button><el-button size="small" @click.stop="emit('copyShot', shot)">复制</el-button><el-button size="small" type="danger" plain @click.stop="emit('deleteShot', shot)">删除</el-button></footer>
         </article>
         <div v-if="group.shots.length" class="trackEndDrop" @dragover.prevent @drop.stop.prevent="dropAtEnd($event, group.id)"><span>＋</span>拖到这里移入本场景末尾</div>
-        <div v-else-if="group.scene && !group.scene.archived" class="emptySceneDrop" @dragover.prevent @drop.prevent="dropAtEnd($event, group.id)"><span>将已有镜头拖到这里</span><el-button type="primary" plain @click.stop="emit('addShot', group.scene.id)">＋ 新增场景镜头</el-button></div>
+        <div v-else-if="group.scene && !group.scene.archived" class="emptySceneDrop" @dragover.prevent @drop.stop.prevent="dropAtEnd($event, group.id)"><span>将已有镜头拖到这里</span><el-button type="primary" plain @click.stop="emit('addShot', group.scene.id)">＋ 新增场景镜头</el-button></div>
         <div v-else class="emptyArchivedScene">该场景当前没有镜头</div>
       </div>
     </section>
@@ -50,6 +50,7 @@ const emit = defineEmits<{
 }>();
 
 const draggingShotId = ref("");
+const dropTargetSceneId = ref("");
 const previewUrls = ref<Record<string, string>>({});
 let previewReleases: (() => void)[] = [];
 let previewRequest = 0;
@@ -115,11 +116,19 @@ function imageMimeType(path: string) {
 }
 function startDrag(event: DragEvent, shot: DramaShot) {
   draggingShotId.value = shot.id;
+  dropTargetSceneId.value = "";
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("application/x-toonflow-shot-id", shot.id);
     event.dataTransfer.setData("text/plain", shot.id);
   }
+}
+function setDropTarget(sceneId: string) {
+  if (draggingShotId.value) dropTargetSceneId.value = sceneId;
+}
+function clearDrag() {
+  draggingShotId.value = "";
+  dropTargetSceneId.value = "";
 }
 function dropOnShot(event: DragEvent, target: DramaShot, sceneId: string) {
   const shotId = event.dataTransfer?.getData("application/x-toonflow-shot-id") || event.dataTransfer?.getData("text/plain");
@@ -127,19 +136,20 @@ function dropOnShot(event: DragEvent, target: DramaShot, sceneId: string) {
   const card = event.currentTarget as HTMLElement;
   const position = event.clientX > card.getBoundingClientRect().left + card.getBoundingClientRect().width / 2 ? "after" : "before";
   emit("moveShot", { shotId, sceneId, targetShotId: target.id, position });
-  draggingShotId.value = "";
+  clearDrag();
 }
 function dropAtEnd(event: DragEvent, sceneId: string) {
   const shotId = event.dataTransfer?.getData("application/x-toonflow-shot-id") || event.dataTransfer?.getData("text/plain");
   if (!shotId) return;
   emit("moveShot", { shotId, sceneId, position: "end" });
-  draggingShotId.value = "";
+  clearDrag();
 }
 </script>
 
 <style lang="scss" scoped>
 .timelineCanvas { display: grid; gap: 14px; min-height: 260px; padding: 16px; overflow: auto; color: #e6edf6; background: #10151d; border: 1px solid #2a3442; border-radius: 8px; }
 .sceneTrack { min-width: 0; padding: 14px; background: #171e28; border: 1px solid #303b4a; border-radius: 7px; }
+.sceneTrack.dropTarget { border-color: #68a8ff; box-shadow: inset 0 0 0 1px #68a8ff; }
 .sceneTrackHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding-bottom: 11px; border-bottom: 1px solid #303b4a; h3 { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: 15px; } h3 small { color: #f0a94b; font-size: 11px; font-weight: 400; } p { margin: 0; color: #8d9bad; font-size: 12px; } }
 .sceneTrackEyebrow { color: #8294a9; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .sceneTrackMeta { display: flex; align-items: center; gap: 10px; color: #a7b5c7; font-size: 12px; white-space: nowrap; }
