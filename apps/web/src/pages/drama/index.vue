@@ -58,8 +58,20 @@
             <el-empty v-else description="请先选择分集" />
           </div>
           <div v-else-if="section === 'storyboard'" class="contentPanel">
-            <div class="panelHeading"><div><h2>分镜管理</h2><p>{{ episodeLabel }} · {{ filteredShots.length }} 个镜头 · 镜号与稳定 ID 独立于排序</p></div><div><el-select v-model="shotSceneFilter" aria-label="按场景筛选"><el-option label="所有场景" value="all" /><el-option v-for="scene in activeScenes" :key="scene.id" :label="scene.heading || `场景 ${scene.number}`" :value="scene.id" /></el-select><el-button :disabled="!currentEpisode" @click="viewMode = viewMode === 'table' ? 'cards' : 'table'">{{ viewMode === 'table' ? '卡片视图' : '表格视图' }}</el-button><el-button type="primary" :disabled="!currentEpisode" @click="addShot">新增镜头</el-button><el-button :disabled="!currentEpisode" @click="save">保存分镜</el-button></div></div>
-            <div class="batchBar"><el-select v-model="batchProductionStatus" aria-label="批量制作状态"><el-option v-for="item in productionStatuses" :key="item" :label="item" :value="item" /></el-select><el-button :disabled="!selectedShots.length" @click="applyBatchProductionStatus">更新所选制作状态</el-button><el-select v-model="batchReviewStatus" aria-label="批量审核状态"><el-option v-for="item in reviewStatuses" :key="item" :label="item" :value="item" /></el-select><el-button :disabled="!selectedShots.length" @click="applyBatchReviewStatus">更新所选审核状态</el-button></div>
+            <div class="timelineToolbar">
+              <div class="timelineIdentity"><span>STORYBOARD · TIMELINE</span><h2>{{ project.name }}</h2><p>{{ currentSeason?.name || "未选择季度" }} · {{ episodeLabel }} · {{ shotSceneFilter === "all" ? "所有场景" : sceneTitle(shotSceneFilter) }}</p></div>
+              <div class="timelineToolbarControls">
+                <el-select v-model="shotSceneFilter" aria-label="当前场景" class="timelineSceneSelect"><el-option label="所有场景" value="all" /><el-option v-for="scene in currentEpisode?.scenes ?? []" :key="scene.id" :label="scene.heading || `场景 ${scene.number}`" :value="scene.id" /></el-select>
+                <label class="timelineZoom">缩放<input v-model.number="timelineZoom" type="range" min="70" max="140" step="10" aria-label="画布缩放" /><span>{{ timelineZoom }}%</span></label>
+                <span class="timelineSaveState" :class="{ saving: busy, failed: timelineSaveState === '保存失败' }">{{ busy ? "保存中…" : timelineSaveState }}</span>
+                <el-button-group><el-button :type="viewMode === 'timeline' ? 'primary' : 'default'" @click="viewMode = 'timeline'">时间线视图</el-button><el-button :type="viewMode === 'table' ? 'primary' : 'default'" @click="viewMode = 'table'">表格视图</el-button></el-button-group>
+                <el-button disabled>自由节点视图（后续）</el-button>
+                <el-button type="primary" :disabled="!currentEpisode || busy" @click="addShot()">新增镜头</el-button>
+                <el-button :disabled="!currentEpisode || busy" @click="save">保存分镜</el-button>
+              </div>
+            </div>
+            <div v-if="viewMode === 'table'" class="batchBar"><el-select v-model="batchProductionStatus" aria-label="批量制作状态"><el-option v-for="item in productionStatuses" :key="item" :label="item" :value="item" /></el-select><el-button :disabled="!selectedShots.length" @click="applyBatchProductionStatus">更新所选制作状态</el-button><el-select v-model="batchReviewStatus" aria-label="批量审核状态"><el-option v-for="item in reviewStatuses" :key="item" :label="item" :value="item" /></el-select><el-button :disabled="!selectedShots.length" @click="applyBatchReviewStatus">更新所选审核状态</el-button></div>
+            <dramaTimeline v-if="currentEpisode && viewMode === 'timeline'" :scenes="currentEpisode.scenes" :shots="currentEpisode.shots" :assets="imageAssets" :directory="workspaceDirectory || ''" :sceneFilter="shotSceneFilter" :selectedShotId="selectedShotId" :zoom="timelineZoom" @openShot="openShotDetail" @generateShot="openShotDetail" @copyShot="copyShot" @deleteShot="deleteTimelineShot" @addShot="addShot" @moveShot="moveTimelineShot" />
             <el-table v-if="currentEpisode && viewMode === 'table'" :data="filteredShots" rowKey="id" @selectionChange="selectedShots = $event as DramaShot[]" @rowClick="selectShot($event as DramaShot)">
               <el-table-column type="selection" width="48" /><el-table-column prop="number" label="镜号" width="95" />
               <el-table-column label="场景" width="160"><template #default="scope"><el-select v-model="scope.row.sceneId" aria-label="镜头场景"><el-option v-for="scene in activeScenes" :key="scene.id" :label="scene.heading || `场景 ${scene.number}`" :value="scene.id" /></el-select></template></el-table-column>
@@ -70,8 +82,7 @@
               <el-table-column label="制作 / 审核" width="190"><template #default="scope"><el-select v-model="scope.row.productionStatus" aria-label="制作状态"><el-option v-for="item in productionStatuses" :key="item" :label="item" :value="item" /></el-select><el-select v-model="scope.row.reviewStatus" aria-label="镜头审核状态"><el-option v-for="item in reviewStatuses" :key="item" :label="item" :value="item" /></el-select></template></el-table-column>
               <el-table-column label="操作" width="150" fixed="right"><template #default="scope"><el-button link type="primary" @click="openShotDetail(scope.row as DramaShot)">详情</el-button><el-button link @click="copyShot(scope.row as DramaShot)">复制</el-button><el-button link :disabled="scope.$index === 0" @click="moveShot(scope.row as DramaShot, -1)">上移</el-button><el-button link :disabled="scope.$index === filteredShots.length - 1" @click="moveShot(scope.row as DramaShot, 1)">下移</el-button></template></el-table-column>
             </el-table>
-            <div v-else-if="currentEpisode" class="shotCards"><article v-for="shot in filteredShots" :key="shot.id" @click="selectShot(shot)"><strong>{{ shot.number }} · {{ sceneTitle(shot.sceneId) }}</strong><span>{{ shot.description }}</span><small>{{ shot.size }} · {{ shot.duration }} 秒 · {{ shot.productionStatus }} · {{ shot.reviewStatus }}</small><el-button link @click.stop="openShotDetail(shot)">编辑详情</el-button></article></div>
-            <el-empty v-else description="请先选择分集" />
+            <el-empty v-if="!currentEpisode" description="请先选择分集" />
           </div>
           <div v-else-if="section === 'characters'" class="contentPanel">
             <div class="panelHeading"><div><h2>人物资产</h2><p>项目内跨集复用；图片以工作区相对路径关联</p></div><el-button type="primary" @click="addCharacter">新增人物</el-button></div>
@@ -140,6 +151,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import http from "@/lib/http";
 import { useWorkspaceStore } from "@/stores/workspace";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
+import dramaTimeline from "@/components/drama/dramaTimeline.vue";
 import gptImageGenerator from "@/components/drama/gptImageGenerator.vue";
 import dramaStudioNav from "./dramaStudioNav.vue";
 import codexAssistantPane from "./codexAssistantPane.vue";
@@ -164,7 +176,9 @@ const currentEpisodeId = ref("");
 const seasonId = ref("");
 const scriptText = ref("");
 const scriptDirty = ref(false);
-const viewMode = ref<"table" | "cards">("table");
+const viewMode = ref<"timeline" | "table">("timeline");
+const timelineZoom = ref(100);
+const timelineSaveState = ref("已保存");
 const codexModel = ref(JSON.stringify(["localCodex", "codex"]));
 const codexConversation = ref<InstanceType<typeof codexAssistantPane>>();
 const assistantCollapsed = ref(false);
@@ -283,7 +297,7 @@ watch(() => workspace.project?.directory, directory => {
   void loadProjects();
 }, { immediate: true });
 watch(seasonId, value => { currentEpisodeId.value = project.value?.seasons.find(item => item.id === value)?.episodes[0] ?? ""; });
-watch(() => currentEpisode.value?.id, () => { selectedSceneId.value = ""; selectedShotId.value = ""; selectedShots.value = []; });
+watch(() => currentEpisode.value?.id, () => { selectedSceneId.value = ""; selectedShotId.value = ""; selectedShots.value = []; shotSceneFilter.value = "all"; timelineSaveState.value = "已保存"; });
 watch(() => currentEpisode.value?.id, async (episodeId, previousId) => {
   if (previousId && previousId === activeScriptEpisodeId.value) await flushDraftAutosave();
   if (episodeId && episodeId === currentEpisode.value?.id) await loadEpisodeScript(episodeId);
@@ -360,9 +374,10 @@ async function save() {
   const targetProject = project.value;
   const targetPath = manifestPath.value;
   const files = useWorkspaceFiles(directory);
+  if (section.value === "storyboard" && viewMode.value === "timeline") timelineSaveState.value = "正在保存";
   busy.value = true;
-  try { await saveDramaProject(files, targetProject, targetPath); if (generatedImageId.value && targetProject.assets.some(item => item.id === generatedImageId.value)) generatedImagePersisted.value = true; if (directory === workspaceDirectory.value) ElMessage.success("项目已保存"); return true; }
-  catch (error) { ElMessage.error(error instanceof Error ? error.message : "保存失败"); return false; }
+  try { await saveDramaProject(files, targetProject, targetPath); if (generatedImageId.value && targetProject.assets.some(item => item.id === generatedImageId.value)) generatedImagePersisted.value = true; if (directory === workspaceDirectory.value) ElMessage.success("项目已保存"); if (section.value === "storyboard" && viewMode.value === "timeline") timelineSaveState.value = "已保存"; return true; }
+  catch (error) { ElMessage.error(error instanceof Error ? error.message : "保存失败"); if (section.value === "storyboard" && viewMode.value === "timeline") timelineSaveState.value = "保存失败"; return false; }
   finally { busy.value = false; }
 }
 async function loadEpisodeScript(episodeId: string) {
@@ -533,10 +548,12 @@ async function saveSceneDetail() {
   Object.assign(target, sceneDraft.value, { characters: sceneDraft.value.characters.slice() });
   if (await save()) sceneDetailVisible.value = false;
 }
-function addShot() {
+function addShot(sceneId?: string) {
   if (!currentEpisode.value) return;
   const shots = currentEpisode.value.shots;
-  const shot: DramaShot = { id: crypto.randomUUID(), number: nextShotNumber(shots), order: Math.max(0, ...shots.map(item => item.order ?? 0)) + 1, sceneId: activeScenes.value[0]?.id ?? "", description: "", action: "", expression: "", size: "", angle: "", composition: "", movement: "", dialogue: "", sound: "", duration: 3, imagePrompt: "", videoPrompt: "", referencePath: "", productionStatus: "待制作", reviewStatus: "草稿", status: "草稿" };
+  const selectedScene = sceneId ? currentEpisode.value.scenes.find(item => item.id === sceneId && !item.archived) : undefined;
+  if (sceneId && !selectedScene) { ElMessage.warning("只能在当前分集的未归档场景中新增镜头"); return; }
+  const shot: DramaShot = { id: crypto.randomUUID(), number: nextShotNumber(shots), order: Math.max(0, ...shots.map(item => item.order ?? 0)) + 1, sceneId: selectedScene?.id ?? activeScenes.value[0]?.id ?? "", description: "", action: "", expression: "", size: "", angle: "", composition: "", movement: "", dialogue: "", sound: "", duration: 3, imagePrompt: "", videoPrompt: "", referencePath: "", productionStatus: "待制作", reviewStatus: "草稿", status: "草稿" };
   currentEpisode.value.shots.push(shot); void save();
 }
 function nextShotNumber(shots: DramaShot[]) {
@@ -571,6 +588,63 @@ function moveShot(shot: DramaShot, direction: -1 | 1) {
   ordered[index]!.order = targetOrder;
   ordered[targetIndex]!.order = currentOrder;
   void save();
+}
+type TimelineShotMove = { shotId: string; sceneId: string; targetShotId?: string; position: "before" | "after" | "end" };
+async function moveTimelineShot(move: TimelineShotMove) {
+  const episode = currentEpisode.value;
+  if (!episode || busy.value) return;
+  const shot = episode.shots.find(item => item.id === move.shotId);
+  if (!shot) return;
+  const targetSceneId = move.sceneId === "__unassigned__" ? "" : move.sceneId;
+  const destinationScene = episode.scenes.find(item => item.id === targetSceneId);
+  if (targetSceneId && !destinationScene) { ElMessage.warning("目标场景不属于当前分集"); return; }
+  if (destinationScene?.archived && shot.sceneId !== destinationScene.id) { ElMessage.warning("镜头不能移动到已归档场景"); return; }
+  if (shot.id === move.targetShotId && shot.sceneId === targetSceneId) return;
+  const originalOrder = episode.shots.map(item => ({ shot: item, sceneId: item.sceneId, order: item.order }));
+  const destinationShots = episode.shots.filter(item => item.sceneId === targetSceneId && item.id !== shot.id).sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
+  let insertAt = destinationShots.length;
+  if (move.position !== "end") {
+    const targetIndex = destinationShots.findIndex(item => item.id === move.targetShotId);
+    if (targetIndex < 0) return;
+    insertAt = targetIndex + (move.position === "after" ? 1 : 0);
+  }
+  destinationShots.splice(insertAt, 0, shot);
+  shot.sceneId = targetSceneId;
+  const sceneIds = episode.scenes.slice().sort((left, right) => (left.order ?? left.number) - (right.order ?? right.number)).map(item => item.id);
+  const orderedSceneIds = [...sceneIds, ...new Set(episode.shots.map(item => item.sceneId).filter(id => !sceneIds.includes(id)))];
+  const orderedShots = orderedSceneIds.flatMap(id => id === targetSceneId
+    ? destinationShots
+    : episode.shots.filter(item => item.sceneId === id).sort((left, right) => (left.order ?? 0) - (right.order ?? 0)));
+  orderedShots.forEach((item, index) => { item.order = index + 1; });
+  if (await save()) {
+    timelineSaveState.value = `${shot.number} 已移动至 ${destinationScene?.heading || "未关联场景"} · 已保存`;
+  } else {
+    originalOrder.forEach(item => { item.shot.sceneId = item.sceneId; item.shot.order = item.order; });
+    timelineSaveState.value = "保存失败";
+  }
+}
+async function deleteTimelineShot(shot: DramaShot) {
+  const episode = currentEpisode.value;
+  if (!episode || busy.value) return;
+  const confirmed = await ElMessageBox.confirm(`从 ${episodeLabel.value} 删除镜头 ${shot.number}？关联图片会保留在素材库。`, "删除镜头", { confirmButtonText: "删除镜头", cancelButtonText: "取消", type: "warning" }).then(() => true, () => false);
+  if (!confirmed || episode !== currentEpisode.value) return;
+  const shotIndex = episode.shots.findIndex(item => item.id === shot.id);
+  if (shotIndex < 0) return;
+  const originalOrder = episode.shots.map(item => ({ shot: item, order: item.order }));
+  const linkedAssets = project.value?.assets.filter(item => item.shotId === shot.id) ?? [];
+  const linkedAssetIds = linkedAssets.map(item => item.id);
+  episode.shots.splice(shotIndex, 1);
+  linkedAssets.forEach(item => { item.shotId = undefined; });
+  episode.shots.slice().sort((left, right) => (left.order ?? 0) - (right.order ?? 0)).forEach((item, index) => { item.order = index + 1; });
+  if (!await save()) {
+    episode.shots.splice(shotIndex, 0, shot);
+    originalOrder.forEach(item => { item.shot.order = item.order; });
+    project.value?.assets.filter(item => linkedAssetIds.includes(item.id)).forEach(item => { item.shotId = shot.id; });
+    timelineSaveState.value = "保存失败";
+    return;
+  }
+  if (selectedShotId.value === shot.id) { selectedShotId.value = ""; selectedSceneId.value = ""; }
+  timelineSaveState.value = `${shot.number} 已删除 · 图片保留在素材库`;
 }
 function copyShot(shot: DramaShot) {
   if (!currentEpisode.value) return;
@@ -820,8 +894,13 @@ function formatDate(value: string) { return new Date(value).toLocaleString("zh-C
 .dramaContent { min-width: 0; overflow: auto; padding: 18px; }
 .contentPanel { min-width: 0; padding: 18px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; background: var(--el-bg-color); h2 { margin: 0; font-size: 17px; } > p { color: var(--el-text-color-secondary); } }
 .panelHeading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; p { margin: 5px 0 0; color: var(--el-text-color-secondary); font-size: 13px; } > div:last-child { display: flex; gap: 8px; } }
+.timelineToolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: -18px -18px 16px; padding: 16px 18px; color: #e6edf6; background: #141b24; border-bottom: 1px solid #303b4a; }
+.timelineIdentity { min-width: 180px; > span { color: #7e9ab8; font-size: 10px; letter-spacing: .1em; } h2 { margin: 3px 0 !important; color: #eef5fc; font-size: 17px !important; } p { margin: 0; color: #94a4b7; font-size: 12px; } }
+.timelineToolbarControls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; }
+.timelineSceneSelect { width: 170px; }
+.timelineZoom { display: flex; align-items: center; gap: 7px; color: #b2bfce; font-size: 11px; white-space: nowrap; input { width: 90px; accent-color: #69aaff; } span { min-width: 34px; color: #dce9f7; text-align: right; } }
+.timelineSaveState { min-width: 86px; color: #83d4a0; font-size: 11px; white-space: nowrap; &.saving { color: #edc275; } &.failed { color: #ff8989; } }
 .overviewGrid { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; margin: 20px 0; > div { display: grid; gap: 6px; padding: 14px; border: 1px solid var(--el-border-color-lighter); border-radius: 5px; span { color: var(--el-text-color-secondary); font-size: 12px; } strong { font-size: 18px; font-weight: 600; } } }
-.shotCards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; article { display: grid; gap: 10px; padding: 15px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; cursor: pointer; strong { color: var(--el-color-primary); } small { color: var(--el-text-color-secondary); } } }
 .saveInline { margin-top: 14px; }
 .scriptLayout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: stretch; }
 .scriptEditor { min-width: 0; > p { margin: 8px 0; color: var(--el-text-color-secondary); font-size: 12px; } }
@@ -838,5 +917,6 @@ function formatDate(value: string) { return new Date(value).toLocaleString("zh-C
 .assetTabs { margin-block: 8px 12px; }
 @media (max-width: 1200px) { .dramaLayout { grid-template-columns: 180px minmax(0, 1fr) 280px; } .dramaLayout.assistantCollapsed { grid-template-columns: 180px minmax(0, 1fr) 44px; } .dramaContent { padding: 12px; } }
 @media (max-width: 900px) { .dramaLayout { grid-template-columns: 160px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 340px; } .dramaLayout.assistantCollapsed { grid-template-rows: minmax(0, 1fr) 48px; } .assistantPane { grid-column: 1 / -1; grid-row: 2; border-inline-start: 0; border-top: 1px solid var(--el-border-color-lighter); } .assistantPane.collapsed { width: auto; } .collapsed .assistantHeader { flex-direction: row; padding: 4px 10px; } .topbarMeta { display: none; } }
-@media (max-width: 700px) { .dramaHeader { align-items: flex-start; flex-direction: column; padding: 12px 16px; } .headerActions { flex-wrap: wrap; } .workspaceTopbar > div:first-child { flex-direction: column; gap: 2px; } .dramaLayout { grid-template-columns: 135px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 320px; } .dramaLayout.assistantCollapsed { grid-template-rows: minmax(0, 1fr) 46px; } .dramaContent { padding: 8px; } .contentPanel { padding: 12px; } .overviewGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .compareColumns, .shotDetailForm, .entityDetailForm { grid-template-columns: minmax(0, 1fr); } .panelHeading { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 1100px) { .timelineToolbar { align-items: flex-start; flex-direction: column; } .timelineToolbarControls { justify-content: flex-start; } }
+@media (max-width: 700px) { .dramaHeader { align-items: flex-start; flex-direction: column; padding: 12px 16px; } .headerActions { flex-wrap: wrap; } .workspaceTopbar > div:first-child { flex-direction: column; gap: 2px; } .dramaLayout { grid-template-columns: 135px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 320px; } .dramaLayout.assistantCollapsed { grid-template-rows: minmax(0, 1fr) 46px; } .dramaContent { padding: 8px; } .contentPanel { padding: 12px; } .overviewGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .compareColumns, .shotDetailForm, .entityDetailForm { grid-template-columns: minmax(0, 1fr); } .panelHeading { align-items: flex-start; flex-direction: column; } .timelineToolbar { margin: -12px -12px 12px; padding: 12px; } .timelineToolbarControls { align-items: flex-start; } .timelineSceneSelect { width: 100%; } }
 </style>
