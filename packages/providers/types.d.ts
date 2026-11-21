@@ -25,6 +25,7 @@ interface ProviderModel<TRules extends readonly ProviderFormRule[] = readonly Pr
   voices?: { title: string; voice: string }[];
   /** 模型专属的 form-create JSON 规则，节点表单值作为 request.other 传入。 */
   rules?: TRules;
+  [key: string]: unknown;
 }
 
 interface ProviderFormRule {
@@ -102,6 +103,10 @@ interface ProviderTools {
    */
   audio: {
     convert(input: Uint8Array, options: AudioConvertOptions): Promise<{ data: Uint8Array; mimeType: string }>;
+  };
+  /** 独立 ChatGPT 会员授权的图片生成宿主能力；不接收 API Key，也不暴露 OAuth 凭据。 */
+  gptImageSubscription: {
+    generateImage(request: { model: string; prompt: string; images?: MediaInput[]; ratio?: string }): Promise<MediaAsset[]>;
   };
   /**
    * 获取绑定当前工作区的原生 @renmu/fluent-ffmpeg 工厂，沿用链式调用、事件、流和 ffprobe 回调。

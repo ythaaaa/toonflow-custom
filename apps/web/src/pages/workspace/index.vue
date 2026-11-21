@@ -25,7 +25,7 @@
         :fileAction="performFileAction"
         :saveNode="saveDocumentNode" />
     </keep-alive>
-    <dramaCenter v-if="activePanel === 'drama'" class="dramaPanel" @returnWorkspace="switchPanel('canvas')" />
+    <dramaCenter v-if="activePanel === 'drama'" class="dramaPanel" @returnWorkspace="switchPanel('canvas')" @openCanvas="switchPanel('canvas')" />
     <workspaceMenu class="workspaceMenu" @openSettings="settingsVisible = true" @openDrama="switchPanel('drama')" />
     <div class="workspaceTools">
       <el-segmented :modelValue="activePanel" class="panelSwitcher" :options="panelOptions" size="small" aria-label="切换面板" @change="switchPanel">

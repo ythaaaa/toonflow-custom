@@ -44,6 +44,7 @@
     "@toonflow/node-shared": "workspace:*",
     "@toonflow/node-video": "workspace:*",
     "@toonflow/nodes-scaffold": "workspace:*",
+    "@toonflow/drama-workspace": "workspace:*",
     "@toonflow/providers": "workspace:*",
     "@toonflow/provider-web": "workspace:*",
     "@toonflow/server": "workspace:*",

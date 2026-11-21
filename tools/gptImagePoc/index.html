@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Toonflow GPT Image POC</title>
+  <style>
+    :root{font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:#24262b;background:#f5f6f8}*{box-sizing:border-box}body{margin:0}.shell{max-width:1060px;margin:32px auto;padding:0 18px}.header,.panel{background:#fff;border:1px solid #e1e4e9;border-radius:8px}.header{padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px}.header h1{font-size:18px;margin:0}.muted{color:#6e737c}.status{display:flex;align-items:center;gap:10px}.panel{margin-top:14px;padding:18px 20px}.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.field{display:grid;gap:5px;flex:1 1 180px}label{font-weight:600}input,select,textarea,button{font:inherit}input,select,textarea{width:100%;padding:8px;border:1px solid #ccd1d9;border-radius:5px;background:#fff}textarea{min-height:110px;resize:vertical}button{padding:8px 13px;border-radius:5px;border:1px solid #cdd2da;background:#fff;cursor:pointer}button.primary{background:#285cc4;border-color:#285cc4;color:#fff}button.danger{color:#a32c2c}.toolbar{display:flex;gap:8px;align-items:center}.message{margin-top:10px;white-space:pre-wrap}.error{color:#b42318}.ok{color:#1b6e35}.result{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(260px,.8fr);gap:20px}.preview{max-width:100%;max-height:600px;object-fit:contain;border:1px solid #e1e4e9;background:#fafafa}.history{display:grid;gap:10px}.historyItem{display:grid;grid-template-columns:110px 1fr;gap:12px;border-top:1px solid #eceef1;padding-top:10px}.historyItem img{width:110px;max-height:100px;object-fit:contain;background:#f4f5f7}.historyItem p{margin:0}.hidden{display:none}@media(max-width:700px){.shell{margin:12px auto}.header{align-items:flex-start;flex-direction:column}.result{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="header">
+      <div><h1>Toonflow GPT Image 订阅通道 PoC</h1><div class="muted">仅本机测试 · 不使用 API Key · 独立授权文件</div></div>
+      <div class="status"><span id="authStatus">读取登录状态…</span><button id="loginButton" class="primary">ChatGPT 登录</button><button id="logoutButton" class="danger hidden">退出</button></div>
+    </header>
+    <section class="panel">
+      <div class="row">
+        <div class="field"><label for="mode">任务</label><select id="mode"><option value="text">文生图</option><option value="edit">参考图编辑</option></select></div>
+        <div class="field"><label for="model">订阅通道参考模型</label><select id="model"></select><small>只保留参考实现固定使用的 gpt-image-2.6-flare。上游响应不回传模型名，实际服务模型无法确认。</small></div>
+        <div class="field"><label for="ratio">画幅比例</label><select id="ratio"><option>auto</option><option>1:1</option><option>16:9</option><option>9:16</option></select></div>
+        <div class="field"><label for="quality">质量请求</label><select id="quality"><option>auto</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option></select><small>参数原样发送；精确档位效果不可保证。上游返回的 quality 字段只作元数据记录，语义未公开。</small></div>
+      </div>
+      <div class="field" style="margin-top:12px"><label for="prompt">提示词</label><textarea id="prompt" placeholder="描述要生成或编辑的图片"></textarea></div>
+      <div class="field hidden" id="referenceField" style="margin-top:12px"><label for="reference">参考图片（PNG/JPEG/WebP，最多 12 MB）</label><input id="reference" type="file" accept="image/png,image/jpeg,image/webp"><div id="referencePreview"></div></div>
+      <div class="toolbar" style="margin-top:12px"><button id="generateButton" class="primary">生成图片</button><span id="progress" class="muted"></span></div>
+      <div id="message" class="message"></div>
+    </section>
+    <section class="panel result hidden" id="resultPanel"><div><h2>最近结果</h2><img id="resultImage" class="preview"><div id="resultFacts" class="muted"></div></div><div><h2>本机运行记录</h2><p>记录请求参数、响应状态、图片元数据、错误和耗时；不写入授权 Token 或图片 Base64。</p><a href="/api/history" target="_blank" rel="noreferrer">查看历史记录 JSON</a><p><a href="/requests.jsonl" target="_blank" rel="noreferrer">查看请求日志</a></p></div></section>
+    <section class="panel"><h2>历史图片</h2><div id="history" class="history"></div></section>
+  </main>
+  <script>
+    const $ = id => document.getElementById(id);
+    let referenceDataUrl = "";
+    let activeRequest = false;
+    async function jsonCall(path, options = {}) { const response = await fetch(path, { ...options, headers: { "content-type": "application/json", ...(options.headers || {}) } }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`); return data; }
+    async function refreshStatus() { const data = await jsonCall("/api/status"); $("authStatus").textContent = data.authenticated ? `已登录${data.email ? `：${data.email}` : ""}` : "未登录"; $("loginButton").classList.toggle("hidden", data.authenticated); $("logoutButton").classList.toggle("hidden", !data.authenticated); const select = $("model"); const current = select.value; select.innerHTML = ""; data.models.forEach(value => { const option = document.createElement("option"); option.value = value; option.textContent = value; select.append(option); }); if (current) select.value = current; }
+    async function refreshHistory() { const rows = await jsonCall("/api/history"); const host = $("history"); host.innerHTML = ""; rows.forEach(row => { const item = document.createElement("div"); item.className = "historyItem"; const img = document.createElement("img"); img.src = `/files/${encodeURIComponent(row.fileName)}`; img.alt = "生成图片"; const reportedQuality = String(row.reportedQuality || "未返回").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); const text = document.createElement("div"); text.innerHTML = `<p><b>${row.mode === "edit" ? "图生图" : "文生图"}</b> · ${row.createdAt}</p><p>${row.model} · 请求比例 ${row.ratio}${row.size ? ` / size ${row.size}` : " / size 未发送"} · 请求质量 ${row.quality} · 上游 quality 字段 ${reportedQuality}（语义未公开）</p><p>实际结果 ${row.width}×${row.height} · ${row.mediaType} · ${(row.bytes / 1024).toFixed(1)} KB · ${row.durationMs} ms</p><p>${row.prompt.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}</p>`; item.append(img, text); host.append(item); }); }
+    $("loginButton").onclick = async () => { try { const { url } = await jsonCall("/api/login/start", { method: "POST", body: "{}" }); location.href = url; } catch (error) { $("message").textContent = error.message; $("message").className = "message error"; } };
+    $("logoutButton").onclick = async () => { if (!confirm("退出并删除 POC 独立授权？")) return; await jsonCall("/api/logout", { method: "POST", body: "{}" }); await refreshStatus(); };
+    $("mode").onchange = () => { $("referenceField").classList.toggle("hidden", $("mode").value !== "edit"); };
+    $("reference").onchange = async event => { const file = event.target.files[0]; referenceDataUrl = ""; $("referencePreview").textContent = ""; if (!file) return; if (file.size > 12 * 1024 * 1024) { event.target.value = ""; throw new Error("参考图大于 12 MB"); } referenceDataUrl = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file); }); const image = document.createElement("img"); image.src = referenceDataUrl; image.alt = "参考图预览"; image.style.maxWidth = "240px"; image.style.maxHeight = "180px"; $("referencePreview").replaceChildren(image); };
+    $("generateButton").onclick = async () => { if (activeRequest) return; const prompt = $("prompt").value.trim(); if (!prompt) { $("message").textContent = "请填写提示词"; $("message").className = "message error"; return; } if ($("mode").value === "edit" && !referenceDataUrl) { $("message").textContent = "请选择一张参考图片"; $("message").className = "message error"; return; } activeRequest = true; $("generateButton").disabled = true; $("progress").textContent = "请求进行中；上游响应后显示真实图片…"; $("message").textContent = ""; try { const row = await jsonCall("/api/generate", { method: "POST", body: JSON.stringify({ mode: $("mode").value, prompt, model: $("model").value, ratio: $("ratio").value, quality: $("quality").value, referenceDataUrl }) }); $("resultPanel").classList.remove("hidden"); $("resultImage").src = `/files/${encodeURIComponent(row.fileName)}`; $("resultFacts").textContent = `${row.width} × ${row.height} · ${row.mediaType} · ${row.bytes.toLocaleString()} bytes · 请求 quality ${row.quality} · 上游 quality 字段 ${row.reportedQuality || "未返回"}（语义未公开）`; $("message").textContent = "收到并保存真实图片响应。请检查下方输出尺寸与请求参数是否一致。"; $("message").className = "message ok"; await refreshHistory(); } catch (error) { $("message").textContent = `失败（未自动回退）：${error.message}`; $("message").className = "message error"; } finally { activeRequest = false; $("generateButton").disabled = false; $("progress").textContent = ""; } };
+    refreshStatus().then(refreshHistory).catch(error => { $("authStatus").textContent = "服务未就绪"; $("message").textContent = error.message; });
+  </script>
+</body>
+</html>

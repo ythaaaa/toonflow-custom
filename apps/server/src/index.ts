@@ -21,6 +21,8 @@ const app = await createApp({
   providersRoot: resolve(appDirectory, fromSource ? "packages/providers/src" : "build/providers"),
   skillsRoot: resolve(appDirectory, fromSource ? "packages/skills" : "build/skills"),
 });
+const { startSubscriptionCallbackServer } = await import("./utils/gptImageSubscription");
+await startSubscriptionCallbackServer();
 const { initializeMcpRuntime } = await import("./utils/mcp/runtime");
 const { startMobileLinkRuntime } = await import("./utils/mobileLink");
 const { startMultiTenantRuntime } = await import("./utils/multiTenant");
