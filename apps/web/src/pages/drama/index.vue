@@ -50,12 +50,10 @@
             <div class="panelHeading"><div><h2>场景管理</h2><p>{{ episodeLabel }} · {{ activeScenes.length }} 个场景 · 已归档 {{ archivedScenes.length }}</p></div><div><el-checkbox v-model="showArchivedScenes">显示已归档</el-checkbox><el-button type="primary" :disabled="!currentEpisode" @click="addScene">新增场景</el-button><el-button :disabled="!currentEpisode" @click="save">保存场景</el-button></div></div>
             <el-table v-if="currentEpisode" :data="visibleScenes" rowKey="id" @rowClick="selectScene($event as DramaScene)">
               <el-table-column prop="number" label="场次" width="86"><template #default="scope">S{{ String(scope.row.number).padStart(3, "0") }}</template></el-table-column>
-              <el-table-column label="地点 / 标题" minWidth="190"><template #default="scope"><el-input v-model="scope.row.heading" aria-label="场景标题" /><el-input v-model="scope.row.location" aria-label="场景地点" /></template></el-table-column>
-              <el-table-column label="内外景 / 时段" width="190"><template #default="scope"><el-select v-model="scope.row.interiorExterior" aria-label="内景或外景"><el-option label="内景" value="内景" /><el-option label="外景" value="外景" /></el-select><el-select v-model="scope.row.dayPart" aria-label="场景时段"><el-option v-for="item in dayParts" :key="item" :label="item" :value="item" /></el-select></template></el-table-column>
-              <el-table-column label="时间" width="130"><template #default="scope"><el-input v-model="scope.row.time" aria-label="场景时间" /></template></el-table-column>
-              <el-table-column label="出场人物" width="170"><template #default="scope"><el-input v-model="scope.row.charactersText" @change="syncSceneCharacters(scope.row as DramaScene)" /></template></el-table-column>
-              <el-table-column label="场景描述" minWidth="260"><template #default="scope"><el-input v-model="scope.row.description" type="textarea" :rows="2" /></template></el-table-column>
-              <el-table-column label="排序 / 操作" width="200" fixed="right"><template #default="scope"><el-button link :disabled="scope.$index === 0" @click="moveScene(scope.row as DramaScene, -1)">上移</el-button><el-button link :disabled="scope.$index === visibleScenes.length - 1" @click="moveScene(scope.row as DramaScene, 1)">下移</el-button><el-button link @click="copyScene(scope.row as DramaScene)">复制</el-button><el-button link type="warning" @click="toggleSceneArchive(scope.row as DramaScene)">{{ scope.row.archived ? "恢复" : "归档" }}</el-button></template></el-table-column>
+              <el-table-column label="场景" minWidth="210"><template #default="scope"><strong>{{ scope.row.heading || "未命名场景" }}</strong><small class="tableSubtext">{{ scope.row.location || "地点待填写" }}</small></template></el-table-column>
+              <el-table-column label="环境描述" minWidth="300"><template #default="scope"><span class="tableDescription">{{ scope.row.description || "尚无环境描述" }}</span></template></el-table-column>
+              <el-table-column label="参考图" minWidth="160"><template #default="scope">{{ sceneImageLabel(scope.row as DramaScene) }}</template></el-table-column>
+              <el-table-column label="操作" width="300" fixed="right"><template #default="scope"><el-button link type="primary" @click.stop="openSceneDetail(scope.row as DramaScene)">详情 / 生图</el-button><el-button link :disabled="scope.$index === 0" @click="moveScene(scope.row as DramaScene, -1)">上移</el-button><el-button link :disabled="scope.$index === visibleScenes.length - 1" @click="moveScene(scope.row as DramaScene, 1)">下移</el-button><el-button link @click="copyScene(scope.row as DramaScene)">复制</el-button><el-button link type="warning" @click="toggleSceneArchive(scope.row as DramaScene)">{{ scope.row.archived ? "恢复" : "归档" }}</el-button></template></el-table-column>
             </el-table>
             <el-empty v-else description="请先选择分集" />
           </div>
@@ -77,8 +75,7 @@
           </div>
           <div v-else-if="section === 'characters'" class="contentPanel">
             <div class="panelHeading"><div><h2>人物资产</h2><p>项目内跨集复用；图片以工作区相对路径关联</p></div><el-button type="primary" @click="addCharacter">新增人物</el-button></div>
-            <el-table :data="project.characters" rowKey="id"><el-table-column prop="name" label="人物" width="160"><template #default="scope"><el-input v-model="scope.row.name" /></template></el-table-column><el-table-column prop="description" label="背景与性格" minWidth="220"><template #default="scope"><el-input v-model="scope.row.description" type="textarea" :rows="2" /></template></el-table-column><el-table-column prop="appearance" label="造型设定" minWidth="220"><template #default="scope"><el-input v-model="scope.row.appearance" type="textarea" :rows="2" /></template></el-table-column><el-table-column prop="referencePath" label="定妆图路径" minWidth="200"><template #default="scope"><el-input v-model="scope.row.referencePath" /></template></el-table-column><el-table-column prop="version" label="版本" width="80" /></el-table>
-            <el-button class="saveInline" @click="save">保存人物更改</el-button>
+            <el-table :data="project.characters" rowKey="id"><el-table-column prop="name" label="人物" minWidth="150"><template #default="scope">{{ scope.row.name || "未命名人物" }}</template></el-table-column><el-table-column prop="description" label="身份及性格" minWidth="240"><template #default="scope"><span class="tableDescription">{{ scope.row.description || "尚未填写" }}</span></template></el-table-column><el-table-column prop="appearance" label="外貌描述" minWidth="260"><template #default="scope"><span class="tableDescription">{{ scope.row.appearance || "尚未填写" }}</span></template></el-table-column><el-table-column label="参考图" minWidth="190"><template #default="scope">{{ scope.row.referencePath ? "已关联人物图片" : "未设置" }}</template></el-table-column><el-table-column prop="version" label="版本" width="80" /><el-table-column label="操作" width="130" fixed="right"><template #default="scope"><el-button link type="primary" @click="openCharacterDetail(scope.row as DramaCharacter)">详情 / 生图</el-button></template></el-table-column></el-table>
           </div>
           <div v-else-if="section === 'assets'" class="contentPanel">
             <div class="panelHeading"><div><h2>{{ assetSectionLabel }}</h2><p>以稳定 ID 关联项目；文件路径使用 Toonflow 工作区相对路径</p></div><el-button type="primary" @click="addAsset(assetView === 'scenesAssets' ? 'scene' : assetView === 'props' ? 'prop' : 'image')">{{ assetView === 'scenesAssets' ? '新增场景资产' : assetView === 'props' ? '新增道具' : '登记图片' }}</el-button></div>
@@ -100,29 +97,36 @@
     <el-dialog v-model="compareVisible" title="剧本版本对比" width="min(1200px, 92vw)" destroyOnClose>
       <div class="compareColumns"><section><h3>{{ compareLeftLabel }}</h3><pre>{{ compareLeftText }}</pre></section><section><h3>{{ compareRightLabel }}</h3><pre>{{ compareRightText }}</pre></section></div>
     </el-dialog>
+    <el-dialog v-model="characterDetailVisible" :title="characterDraft?.name || '人物详情'" width="min(900px, 92vw)" destroyOnClose>
+      <el-form v-if="characterDraft" labelPosition="top" class="entityDetailForm">
+        <el-form-item label="人物名称"><el-input v-model="characterDraft.name" /></el-form-item>
+        <el-form-item label="人物身份及性格" class="wideFormItem"><el-input v-model="characterDraft.description" type="textarea" :rows="3" /></el-form-item>
+        <el-form-item label="人物外貌描述" class="wideFormItem"><el-input v-model="characterDraft.appearance" type="textarea" :rows="4" /></el-form-item>
+        <el-form-item label="人物参考图与 GPT 会员生图" class="wideFormItem"><gptImageGenerator v-model:prompt="characterImagePrompt" v-model:aspectRatio="characterImageRatio" :projectId="project.id" :directory="workspaceDirectory || ''" :referenceOptions="gptReferenceOptions" :initialImagePath="characterDraft.referencePath" initialImageLabel="当前人物参考图" :generatedPersisted="generatedImagePersisted" :saving="imageAssetSaving" @generated="persistCharacterImage" @referencesUploaded="saveCharacterReferences" @useImage="useCharacterImage" /></el-form-item>
+        <el-collapse><el-collapse-item title="高级信息" name="advanced"><el-form-item label="版本"><el-input-number v-model="characterDraft.version" :min="1" /></el-form-item><el-form-item label="人物 ID"><el-input :modelValue="characterDraft.id" disabled /></el-form-item></el-collapse-item></el-collapse>
+      </el-form>
+      <template #footer><el-button @click="characterDetailVisible = false">取消</el-button><el-button type="primary" :loading="busy" @click="saveCharacterDetail">保存人物</el-button></template>
+    </el-dialog>
+    <el-dialog v-model="sceneDetailVisible" :title="sceneDraft?.heading || '场景详情'" width="min(900px, 92vw)" destroyOnClose>
+      <el-form v-if="sceneDraft" labelPosition="top" class="entityDetailForm">
+        <el-form-item label="场景名称"><el-input v-model="sceneDraft.heading" /></el-form-item>
+        <el-form-item label="场景地点"><el-input v-model="sceneDraft.location" /></el-form-item>
+        <el-form-item label="场景环境描述" class="wideFormItem"><el-input v-model="sceneDraft.description" type="textarea" :rows="4" /></el-form-item>
+        <el-form-item label="场景参考图与 GPT 会员生图" class="wideFormItem"><gptImageGenerator v-model:prompt="sceneImagePrompt" v-model:aspectRatio="sceneImageRatio" :projectId="project.id" :directory="workspaceDirectory || ''" :referenceOptions="gptReferenceOptions" :initialImagePath="sceneImageAsset?.referencePath" :initialImageLabel="sceneImageAsset?.name || '当前场景参考图'" :generatedPersisted="generatedImagePersisted" :saving="imageAssetSaving" @generated="persistSceneImage" @referencesUploaded="saveSceneReferences" @useImage="useSceneImage" /></el-form-item>
+        <el-collapse><el-collapse-item title="高级信息" name="advanced"><div class="formRow"><el-form-item label="时间"><el-input v-model="sceneDraft.time" /></el-form-item><el-form-item label="内景 / 外景"><el-select v-model="sceneDraft.interiorExterior"><el-option label="内景" value="内景" /><el-option label="外景" value="外景" /></el-select></el-form-item><el-form-item label="时段"><el-select v-model="sceneDraft.dayPart"><el-option v-for="item in dayParts" :key="item" :label="item" :value="item" /></el-select></el-form-item></div><el-form-item label="出场人物"><el-input v-model="sceneDraft.charactersText" @change="syncSceneCharacters(sceneDraft)" /></el-form-item><el-form-item label="场景 ID"><el-input :modelValue="sceneDraft.id" disabled /></el-form-item></el-collapse-item></el-collapse>
+      </el-form>
+      <template #footer><el-button @click="sceneDetailVisible = false">取消</el-button><el-button type="primary" :loading="busy" @click="saveSceneDetail">保存场景</el-button></template>
+    </el-dialog>
     <el-dialog v-model="shotDetailVisible" title="镜头详情" width="min(900px, 92vw)" destroyOnClose>
       <el-form v-if="shotDraft" labelPosition="top" class="shotDetailForm">
         <el-form-item label="镜头编号"><el-input v-model="shotDraft.number" disabled /></el-form-item>
         <el-form-item label="所属场景"><el-select v-model="shotDraft.sceneId"><el-option v-for="scene in currentEpisode?.scenes.filter(item => !item.archived)" :key="scene.id" :label="scene.heading || `场景 ${scene.number}`" :value="scene.id" /></el-select></el-form-item>
-        <el-form-item label="景别"><el-input v-model="shotDraft.size" /></el-form-item><el-form-item label="机位"><el-input v-model="shotDraft.angle" /></el-form-item><el-form-item label="构图"><el-input v-model="shotDraft.composition" /></el-form-item>
-        <el-form-item label="画面描述"><el-input v-model="shotDraft.description" type="textarea" :rows="3" /></el-form-item><el-form-item label="人物动作"><el-input v-model="shotDraft.action" type="textarea" :rows="2" /></el-form-item><el-form-item label="人物表情"><el-input v-model="shotDraft.expression" /></el-form-item>
-        <el-form-item label="台词"><el-input v-model="shotDraft.dialogue" type="textarea" :rows="2" /></el-form-item><el-form-item label="时长（秒）"><el-input-number v-model="shotDraft.duration" :min="1" :max="600" /></el-form-item><el-form-item label="画幅"><el-input v-model="shotDraft.aspectRatio" placeholder="例如 9:16" /></el-form-item>
-        <el-form-item label="运镜"><el-input v-model="shotDraft.movement" /></el-form-item><el-form-item label="音效 / 声音设计"><el-input v-model="shotDraft.sound" type="textarea" :rows="2" /></el-form-item><el-form-item label="图片提示词"><el-input v-model="shotDraft.imagePrompt" type="textarea" :rows="3" /></el-form-item><el-form-item label="视频提示词"><el-input v-model="shotDraft.videoPrompt" type="textarea" :rows="3" /></el-form-item>
-        <el-form-item label="GPT 会员生图">
-          <div class="gptImagePanel">
-            <div class="gptImageAuth"><span>授权状态：{{ gptImageStatus.authenticated ? `已连接${gptImageStatus.email ? ` · ${gptImageStatus.email}` : ""}` : "未授权" }}</span><el-button v-if="!gptImageStatus.authenticated" size="small" :loading="gptAuthBusy" @click="authorizeGptImage">独立 ChatGPT 授权</el-button><el-button v-else size="small" @click="logoutGptImage">退出授权</el-button></div>
-            <p class="gptImageNote">固定模型 gpt-image-2.6-flare；质量请求固定为 auto，实际画质由上游决定。比例通过请求画布尺寸与提示词尽力控制，实际像素不保证。</p>
-            <el-select v-model="gptImageRatio" aria-label="生图画幅" style="width: 180px"><el-option label="1:1 方形" value="1:1" /><el-option label="16:9 横屏" value="16:9" /><el-option label="9:16 竖屏" value="9:16" /></el-select>
-            <el-select v-model="gptReferenceAssetIds" multiple clearable filterable placeholder="选择人物或场景参考图" style="width: 100%; margin-top: 8px"><el-option v-for="item in gptReferenceOptions" :key="item.id" :label="item.label" :value="item.id" /></el-select>
-            <div class="gptImageUpload"><el-select v-model="gptReferenceCategory" style="width: 150px"><el-option label="人物定妆图" value="人物定妆图" /><el-option label="场景参考图" value="场景参考图" /></el-select><input type="file" accept="image/png,image/jpeg,image/webp" multiple :disabled="gptReferenceUploading" @change="uploadGptReferences" /><span>上传 PNG / JPEG / WebP（单张不超过 12 MB）</span></div>
-            <div class="gptImageActions"><el-button type="primary" :disabled="!gptImageStatus.authenticated || !shotDraft.imagePrompt?.trim()" :loading="gptImageGenerating" @click="generateShotImage">{{ gptImageGenerating ? "正在生成并保存…" : gptReferenceAssetIds.length ? "参考图编辑" : "文生图" }}</el-button><span v-if="gptImageGenerating">请求已提交，等待上游返回图片。</span></div>
-            <div v-if="gptPreviewUrl" class="gptImagePreview"><img :src="gptPreviewUrl" alt="当前镜头图片素材预览" /><div><span>{{ gptPreviewLabel }}</span><el-button v-if="gptGeneratedAsset" size="small" type="primary" @click="confirmGeneratedImage">确认用作首帧</el-button></div></div>
-          </div>
-        </el-form-item>
-        <el-form-item label="首帧素材"><el-select v-model="shotDraft.firstFrameAssetId" clearable @change="loadSelectedShotPreview"><el-option v-for="asset in imageAssets" :key="asset.id" :label="asset.name || asset.id" :value="asset.id" /></el-select></el-form-item>
-        <el-form-item label="尾帧素材"><el-select v-model="shotDraft.lastFrameAssetId" clearable><el-option v-for="asset in imageAssets" :key="asset.id" :label="asset.name || asset.id" :value="asset.id" /></el-select></el-form-item>
-        <el-form-item label="参考素材"><el-select v-model="shotDraft.referenceAssetIds" multiple clearable><el-option v-for="asset in project?.assets ?? []" :key="asset.id" :label="asset.name || asset.id" :value="asset.id" /></el-select></el-form-item>
-        <el-form-item label="旧版参考图路径"><el-input v-model="shotDraft.referencePath" /></el-form-item><el-form-item label="制作状态"><el-select v-model="shotDraft.productionStatus"><el-option v-for="item in productionStatuses" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="审核状态"><el-select v-model="shotDraft.reviewStatus"><el-option v-for="item in reviewStatuses" :key="item" :label="item" :value="item" /></el-select></el-form-item>
+        <el-form-item label="景别"><el-input v-model="shotDraft.size" /></el-form-item><el-form-item label="机位"><el-input v-model="shotDraft.angle" /></el-form-item>
+        <el-form-item label="画面描述"><el-input v-model="shotDraft.description" type="textarea" :rows="3" /></el-form-item><el-form-item label="人物动作和表情"><el-input v-model="shotDraft.action" type="textarea" :rows="2" /><el-input v-model="shotDraft.expression" /></el-form-item>
+        <el-form-item label="台词"><el-input v-model="shotDraft.dialogue" type="textarea" :rows="2" /></el-form-item><el-form-item label="时长（秒）"><el-input-number v-model="shotDraft.duration" :min="1" :max="600" /></el-form-item>
+        <el-form-item label="图片提示词与 GPT 会员生图" class="wideFormItem"><gptImageGenerator v-model:prompt="shotImagePrompt" v-model:aspectRatio="shotImageRatio" :projectId="project.id" :directory="workspaceDirectory || ''" :referenceOptions="gptReferenceOptions" :initialImagePath="shotInitialImagePath" :initialImageLabel="shotInitialImageLabel" :generatedPersisted="generatedImagePersisted" :saving="imageAssetSaving" @generated="persistShotImage" @referencesUploaded="saveShotReferences" @useImage="useShotImage" /></el-form-item>
+        <el-form-item label="视频提示词" class="wideFormItem"><el-input v-model="shotDraft.videoPrompt" type="textarea" :rows="3" /></el-form-item>
+        <el-collapse class="wideFormItem"><el-collapse-item title="高级设置" name="advanced"><el-form-item label="构图"><el-input v-model="shotDraft.composition" /></el-form-item><el-form-item label="运镜"><el-input v-model="shotDraft.movement" /></el-form-item><el-form-item label="音效 / 声音设计"><el-input v-model="shotDraft.sound" type="textarea" :rows="2" /></el-form-item><el-form-item label="首帧素材"><el-select v-model="shotDraft.firstFrameAssetId" clearable><el-option v-for="asset in imageAssets" :key="asset.id" :label="asset.name || asset.id" :value="asset.id" /></el-select></el-form-item><el-form-item label="尾帧素材"><el-select v-model="shotDraft.lastFrameAssetId" clearable><el-option v-for="asset in imageAssets" :key="asset.id" :label="asset.name || asset.id" :value="asset.id" /></el-select></el-form-item><el-form-item label="参考素材"><el-select v-model="shotDraft.referenceAssetIds" multiple clearable><el-option v-for="asset in project?.assets ?? []" :key="asset.id" :label="asset.name || asset.id" :value="asset.id" /></el-select></el-form-item><el-form-item label="旧版参考图路径"><el-input v-model="shotDraft.referencePath" /></el-form-item><div class="formRow"><el-form-item label="制作状态"><el-select v-model="shotDraft.productionStatus"><el-option v-for="item in productionStatuses" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="审核状态"><el-select v-model="shotDraft.reviewStatus"><el-option v-for="item in reviewStatuses" :key="item" :label="item" :value="item" /></el-select></el-form-item></div></el-collapse-item></el-collapse>
       </el-form>
       <template #footer><el-button @click="shotDetailVisible = false">取消</el-button><el-button type="primary" :loading="busy" @click="saveShotDetail">保存镜头</el-button></template>
     </el-dialog>
@@ -136,6 +140,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import http from "@/lib/http";
 import { useWorkspaceStore } from "@/stores/workspace";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
+import gptImageGenerator from "@/components/drama/gptImageGenerator.vue";
 import dramaStudioNav from "./dramaStudioNav.vue";
 import codexAssistantPane from "./codexAssistantPane.vue";
 import { createDramaProject, createSeason, listDramaProjects, readEpisodeScript, saveDramaProject, saveEpisodeDraft, saveEpisodeScriptVersion, updateScriptReview, type DramaAsset, type DramaCharacter, type DramaEpisode, type DramaProject, type DramaProductionStatus, type DramaScene, type DramaShot, type DramaStatus, type DramaScriptVersion } from "@/lib/dramaWorkspace";
@@ -176,18 +181,19 @@ const batchProductionStatus = ref<DramaProductionStatus>("制作中");
 const batchReviewStatus = ref<DramaStatus>("待审核");
 const shotDraft = ref<DramaShot | null>(null);
 const shotDetailVisible = ref(false);
-const gptImageStatus = ref({ authenticated: false, email: "", expiresAt: null as number | null, model: "gpt-image-2.6-flare", aspectRatios: ["1:1", "16:9", "9:16"], quality: "auto" });
-const gptAuthBusy = ref(false);
-const gptImageGenerating = ref(false);
-const gptReferenceUploading = ref(false);
-const gptReferenceCategory = ref("人物定妆图");
-const gptReferenceAssetIds = ref<string[]>([]);
-const gptImageRatio = ref("9:16");
-const gptGeneratedAsset = ref<DramaAsset>();
-const gptPreviewUrl = ref("");
-const gptPreviewLabel = ref("");
-let releaseGptPreview: (() => void) | undefined;
-let gptPreviewRequest = 0;
+const characterDraft = ref<DramaCharacter | null>(null);
+const characterDetailVisible = ref(false);
+const characterImagePrompt = ref("");
+const characterImageRatio = ref("1:1");
+const sceneDraft = ref<DramaScene | null>(null);
+const sceneDetailVisible = ref(false);
+const sceneImagePrompt = ref("");
+const sceneImageRatio = ref("16:9");
+const shotImagePrompt = ref("");
+const shotImageRatio = ref("9:16");
+const generatedImageId = ref("");
+const generatedImagePersisted = ref(false);
+const imageAssetSaving = ref(false);
 const compareVisible = ref(false);
 const compareLeftId = ref("");
 const compareRightId = ref("");
@@ -227,8 +233,16 @@ const assetSectionLabel = computed(() => assetView.value === "scenesAssets" ? "�
 const imageAssets = computed(() => project.value?.assets.filter(item => item.kind === "image") ?? []);
 const gptReferenceOptions = computed(() => [
   ...(project.value?.characters.filter(item => item.referencePath).map(item => ({ id: item.id, label: `人物 · ${item.name || item.id}`, referencePath: item.referencePath })) ?? []),
-  ...(project.value?.assets.filter(item => item.referencePath && item.kind === "image").map(item => ({ id: item.id, label: `${item.description?.includes("场景") ? "场景" : "素材"} · ${item.name || item.id}`, referencePath: item.referencePath })) ?? []),
+  ...(project.value?.assets.filter(item => item.referencePath && item.kind === "image").map(item => ({ id: item.id, label: `${item.characterId ? "人物" : item.sceneId ? "场景" : "素材"} · ${item.name || item.id}`, referencePath: item.referencePath })) ?? []),
 ]);
+const sceneImageAsset = computed(() => {
+  if (!sceneDraft.value) return undefined;
+  const linked = imageAssets.value.filter(item => item.sceneId === sceneDraft.value?.id);
+  return linked.find(item => item.id === sceneDraft.value?.referenceAssetId) ?? linked.at(-1);
+});
+const shotInitialImage = computed(() => imageAssets.value.find(item => item.id === shotDraft.value?.firstFrameAssetId));
+const shotInitialImagePath = computed(() => shotInitialImage.value?.referencePath ?? "");
+const shotInitialImageLabel = computed(() => shotInitialImage.value?.name ?? "当前首帧素材");
 const selectedScene = computed(() => currentEpisode.value?.scenes.find(item => item.id === selectedSceneId.value));
 const selectedShot = computed(() => currentEpisode.value?.shots.find(item => item.id === selectedShotId.value));
 const codexContext = computed(() => [
@@ -283,7 +297,7 @@ watch(scriptText, content => {
   const episodeId = activeScriptEpisodeId.value;
   autosaveTimer = setTimeout(() => { void autosaveDraft(episodeId, content); }, 700);
 }, { flush: "sync" });
-onScopeDispose(() => { clearTimeout(autosaveTimer); releaseGptPreview?.(); });
+onScopeDispose(() => { clearTimeout(autosaveTimer); });
 
 async function loadProjects() {
   const directory = workspaceDirectory.value;
@@ -347,7 +361,7 @@ async function save() {
   const targetPath = manifestPath.value;
   const files = useWorkspaceFiles(directory);
   busy.value = true;
-  try { await saveDramaProject(files, targetProject, targetPath); if (directory === workspaceDirectory.value) ElMessage.success("项目已保存"); return true; }
+  try { await saveDramaProject(files, targetProject, targetPath); if (generatedImageId.value && targetProject.assets.some(item => item.id === generatedImageId.value)) generatedImagePersisted.value = true; if (directory === workspaceDirectory.value) ElMessage.success("项目已保存"); return true; }
   catch (error) { ElMessage.error(error instanceof Error ? error.message : "保存失败"); return false; }
   finally { busy.value = false; }
 }
@@ -499,7 +513,25 @@ function addScene() {
   if (!currentEpisode.value) return;
   const scenes = currentEpisode.value.scenes;
   const scene: DramaScene = { id: crypto.randomUUID(), number: Math.max(0, ...scenes.map(item => item.number)) + 1, order: Math.max(0, ...scenes.map(item => item.order ?? item.number)) + 1, sourceScriptVersionId: currentVersion.value?.id, archived: false, heading: "", time: "", location: "", interiorExterior: "内景", dayPart: "白天", characters: [], charactersText: "", description: "" };
-  currentEpisode.value.scenes.push(scene); void save();
+  currentEpisode.value.scenes.push(scene); openSceneDetail(scene); void save();
+}
+function openSceneDetail(scene: DramaScene) {
+  selectScene(scene);
+  sceneDraft.value = { ...scene, characters: scene.characters.slice() };
+  sceneImagePrompt.value = makeScenePrompt(scene);
+  sceneImageRatio.value = "16:9";
+  generatedImageId.value = "";
+  generatedImagePersisted.value = false;
+  sceneDetailVisible.value = true;
+}
+function makeScenePrompt(scene: DramaScene) {
+  return ["短剧场景设定图，突出空间布局、环境氛围与可拍摄细节。", scene.heading && `场景：${scene.heading}`, scene.location && `地点：${scene.location}`, scene.description && `环境描述：${scene.description}`, scene.interiorExterior && scene.dayPart && `${scene.interiorExterior}，${scene.dayPart}`, scene.time && `时间：${scene.time}`, project.value?.style && `画面风格：${project.value.style}`].filter(Boolean).join("\n");
+}
+async function saveSceneDetail() {
+  const target = currentEpisode.value?.scenes.find(item => item.id === sceneDraft.value?.id);
+  if (!target || !sceneDraft.value) return;
+  Object.assign(target, sceneDraft.value, { characters: sceneDraft.value.characters.slice() });
+  if (await save()) sceneDetailVisible.value = false;
 }
 function addShot() {
   if (!currentEpisode.value) return;
@@ -524,7 +556,7 @@ function moveScene(scene: DramaScene, direction: -1 | 1) {
 function copyScene(scene: DramaScene) {
   if (!currentEpisode.value) return;
   const scenes = currentEpisode.value.scenes;
-  scenes.push({ ...scene, id: crypto.randomUUID(), number: Math.max(0, ...scenes.map(item => item.number)) + 1, order: Math.max(0, ...scenes.map(item => item.order ?? item.number)) + 1, heading: `${scene.heading}（副本）`, archived: false });
+  scenes.push({ ...scene, id: crypto.randomUUID(), number: Math.max(0, ...scenes.map(item => item.number)) + 1, order: Math.max(0, ...scenes.map(item => item.order ?? item.number)) + 1, heading: `${scene.heading}（副本）`, archived: false, referenceAssetId: undefined });
   void save();
 }
 function toggleSceneArchive(scene: DramaScene) { scene.archived = !scene.archived; void save(); }
@@ -548,155 +580,115 @@ function copyShot(shot: DramaShot) {
 }
 function openShotDetail(shot: DramaShot) {
   selectShot(shot);
-  shotDraft.value = { ...shot };
-  gptGeneratedAsset.value = undefined;
-  gptReferenceAssetIds.value = [];
-  gptImageRatio.value = ["1:1", "16:9", "9:16"].includes(shot.aspectRatio ?? "") ? shot.aspectRatio! : "9:16";
+  shotDraft.value = { ...shot, imagePrompt: shot.imagePrompt || makeShotPrompt(shot) };
+  shotImagePrompt.value = shotDraft.value.imagePrompt ?? "";
+  shotImageRatio.value = ["1:1", "16:9", "9:16"].includes(shot.aspectRatio ?? "") ? shot.aspectRatio! : "9:16";
+  generatedImageId.value = "";
+  generatedImagePersisted.value = false;
   shotDetailVisible.value = true;
-  void refreshGptImageStatus();
-  void loadSelectedShotPreview();
 }
-async function refreshGptImageStatus() {
-  try { gptImageStatus.value = await http<typeof gptImageStatus.value>({ method: "GET", url: "/api/gptImage/status", timeout: 10000 }); }
-  catch { gptImageStatus.value = { ...gptImageStatus.value, authenticated: false, email: "", expiresAt: null }; }
+function makeShotPrompt(shot: DramaShot) {
+  return ["短剧分镜画面，单帧构图清晰，适合后续动画制作。", sceneTitle(shot.sceneId) && `场景：${sceneTitle(shot.sceneId)}`, shot.size && `景别：${shot.size}`, shot.angle && `机位：${shot.angle}`, shot.description && `画面：${shot.description}`, shot.action && `动作：${shot.action}`, shot.expression && `表情：${shot.expression}`, project.value?.style && `画面风格：${project.value.style}`].filter(Boolean).join("\n");
 }
-async function authorizeGptImage() {
-  const popup = window.open("about:blank", "toonflow_gpt_image_auth");
-  if (!popup) { ElMessage.error("浏览器阻止了授权窗口，请允许弹出窗口后重试"); return; }
-  gptAuthBusy.value = true;
-  try {
-    const { url } = await http<{ url: string }>({ method: "POST", url: "/api/gptImage/login", timeout: 10000 });
-    popup.location.href = url;
-    for (let attempt = 0; attempt < 300; attempt++) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      await refreshGptImageStatus();
-      if (gptImageStatus.value.authenticated) { ElMessage.success("GPT 会员生图授权已连接"); return; }
-    }
-    ElMessage.warning("尚未检测到授权完成，请完成登录后重试状态检查");
-  } catch (error) { popup.close(); ElMessage.error(error instanceof Error ? error.message : "启动 ChatGPT 授权失败"); }
-  finally { gptAuthBusy.value = false; }
-}
-async function logoutGptImage() {
-  try { await http({ method: "POST", url: "/api/gptImage/logout", timeout: 10000 }); await refreshGptImageStatus(); ElMessage.success("已退出 GPT 会员生图授权"); }
-  catch (error) { ElMessage.error(error instanceof Error ? error.message : "退出授权失败"); }
-}
-function imageMimeType(path: string) {
-  const extension = path.toLowerCase().split(".").at(-1);
-  return extension === "png" ? "image/png" : extension === "jpg" || extension === "jpeg" ? "image/jpeg" : extension === "webp" ? "image/webp" : "";
-}
-async function ensureWorkspaceDirectory(files: ReturnType<typeof useWorkspaceFiles>, path: string) {
-  let current = "";
-  for (const part of path.split("/").filter(Boolean)) {
-    const entries = await files.list(current);
-    current = current ? `${current}/${part}` : part;
-    if (!entries.entries.some(item => item.name === part && item.type === "directory")) await files.mkdir(current);
-  }
-}
-async function uploadGptReferences(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const uploads = Array.from(input.files ?? []);
-  input.value = "";
-  const directory = workspaceDirectory.value;
+type GeneratedImageResult = { path: string; mimeType: string; prompt: string; aspectRatio: string; referenceAssetIds: string[]; width?: number; height?: number };
+type ImageAssociation = { characterId?: string; episodeId?: string; sceneId?: string; shotId?: string };
+async function persistGeneratedImage(image: GeneratedImageResult, association: ImageAssociation, label: string) {
   const targetProject = project.value;
-  if (!uploads.length || !directory || !targetProject || gptReferenceUploading.value) return;
-  gptReferenceUploading.value = true;
+  if (!targetProject || imageAssetSaving.value) return;
+  imageAssetSaving.value = true;
+  generatedImagePersisted.value = false;
   try {
-    const files = useWorkspaceFiles(directory);
-    const folder = `.toonflow/drama/assets/${targetProject.id}/references`;
-    await ensureWorkspaceDirectory(files, folder);
-    for (const upload of uploads) {
-      if (!(upload.type === "image/png" || upload.type === "image/jpeg" || upload.type === "image/webp") || upload.size > 12 * 1024 * 1024) {
-        ElMessage.warning(`${upload.name} 不是受支持的图片或超过 12 MB，已跳过`);
-        continue;
-      }
-      const extension = upload.type === "image/png" ? "png" : upload.type === "image/jpeg" ? "jpg" : "webp";
-      const id = crypto.randomUUID();
-      const path = `${folder}/${id}.${extension}`;
-      await files.write(path, await upload.arrayBuffer(), true);
-      const asset: DramaAsset = { id, kind: "image", name: upload.name.slice(0, 160), description: gptReferenceCategory.value, referencePath: path, version: 1, projectId: targetProject.id };
-      targetProject.assets.push(asset);
-      if (!await save()) { targetProject.assets = targetProject.assets.filter(item => item.id !== id); break; }
-      gptReferenceAssetIds.value = [...gptReferenceAssetIds.value, id];
-    }
-  } catch (error) { ElMessage.error(error instanceof Error ? error.message : "上传参考图失败"); }
-  finally { gptReferenceUploading.value = false; }
-}
-async function setGptPreview(asset: DramaAsset, directory = workspaceDirectory.value) {
-  if (!directory || !asset.referencePath) return;
-  const request = ++gptPreviewRequest;
-  const acquired = useWorkspaceFiles(directory).acquireUrl(asset.referencePath, imageMimeType(asset.referencePath) || undefined);
-  try {
-    const url = await acquired.url;
-    if (request !== gptPreviewRequest) { acquired.release(); return; }
-    releaseGptPreview?.();
-    releaseGptPreview = acquired.release;
-    gptPreviewUrl.value = url;
-    gptPreviewLabel.value = `${asset.name}${asset.width && asset.height ? ` · ${asset.width} × ${asset.height}` : ""}`;
-  } catch (error) { acquired.release(); ElMessage.error(error instanceof Error ? error.message : "读取镜头图片失败"); }
-}
-async function loadSelectedShotPreview() {
-  const asset = imageAssets.value.find(item => item.id === shotDraft.value?.firstFrameAssetId);
-  if (!asset) { releaseGptPreview?.(); releaseGptPreview = undefined; gptPreviewUrl.value = ""; gptGeneratedAsset.value = undefined; return; }
-  gptGeneratedAsset.value = undefined;
-  await setGptPreview(asset);
-}
-async function imageDimensions(url: string) {
-  return new Promise<{ width: number; height: number } | undefined>(resolve => {
-    const image = new Image();
-    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
-    image.onerror = () => resolve(undefined);
-    image.src = url;
-  });
-}
-async function generateShotImage() {
-  const directory = workspaceDirectory.value;
-  const targetProject = project.value;
-  const episode = currentEpisode.value;
-  const draft = shotDraft.value;
-  if (!directory || !targetProject || !episode || !draft || !draft.imagePrompt?.trim()) return;
-  if (!gptImageStatus.value.authenticated) { ElMessage.warning("请先完成独立 ChatGPT 授权"); return; }
-  const selectedReferences = gptReferenceOptions.value.filter(item => gptReferenceAssetIds.value.includes(item.id));
-  if (selectedReferences.some(item => !imageMimeType(item.referencePath))) { ElMessage.error("参考素材需要使用 PNG、JPEG 或 WebP 文件"); return; }
-  gptImageGenerating.value = true;
-  try {
-    const generated = await http<{ path: string; mimeType: string; mediaType: "image" }[]>({
-      method: "POST", url: "/api/ai/media/generate", timeout: 240000,
-      data: { directory, mediaType: "image", providerId: "gptImageSubscription", modelId: "gpt-image-2.6-flare", prompt: draft.imagePrompt,
-        ratio: gptImageRatio.value, images: selectedReferences.map(item => ({ path: item.referencePath, mimeType: imageMimeType(item.referencePath) })),
-        outputDirectory: `.toonflow/drama/assets/${targetProject.id}/generated` },
-    });
-    const result = generated[0];
-    if (!result || result.mediaType !== "image") throw new Error("生图服务没有返回图片文件");
-    if (project.value?.id !== targetProject.id || currentEpisode.value?.id !== episode.id || shotDraft.value?.id !== draft.id || workspaceDirectory.value !== directory) {
-      ElMessage.warning(`图片已保存到原工作区 ${result.path}，但当前上下文已切换，因此未关联到新项目`);
-      return;
-    }
-    const previewHandle = useWorkspaceFiles(directory).acquireUrl(result.path, result.mimeType);
-    const previewUrl = await previewHandle.url;
-    const dimensions = await imageDimensions(previewUrl);
-    previewHandle.release();
-    const scene = episode.scenes.find(item => item.id === draft.sceneId);
-    const asset: DramaAsset = { id: crypto.randomUUID(), kind: "image", name: `${draft.number} GPT 生图 ${new Date().toLocaleString()}`,
-      description: draft.imagePrompt, referencePath: result.path, version: 1, generatedBy: "gptImageSubscription", modelId: "gpt-image-2.6-flare",
-      generatedAt: new Date().toISOString(), requestedAspectRatio: gptImageRatio.value, ...(dimensions ?? {}), referenceAssetIds: [...gptReferenceAssetIds.value],
-      projectId: targetProject.id, episodeId: episode.id, sceneId: scene?.id, shotId: draft.id };
+    const previousGeneratedImageId = generatedImageId.value;
+    const targetShot = association.shotId && shotDraft.value?.id === association.shotId ? shotDraft.value : undefined;
+    const previousShotAspectRatio = targetShot?.aspectRatio;
+    const asset: DramaAsset = { id: crypto.randomUUID(), kind: "image", name: `${label} GPT 生图 ${new Date().toLocaleString()}`, description: image.prompt, referencePath: image.path, version: 1,
+      generatedBy: "gptImageSubscription", modelId: "gpt-image-2.6-flare", generatedAt: new Date().toISOString(), requestedAspectRatio: image.aspectRatio,
+      width: image.width, height: image.height, referenceAssetIds: image.referenceAssetIds, projectId: targetProject.id, ...association };
     targetProject.assets.push(asset);
-    if (!await save()) { targetProject.assets = targetProject.assets.filter(item => item.id !== asset.id); return; }
-    draft.aspectRatio = gptImageRatio.value;
-    gptGeneratedAsset.value = asset;
-    await setGptPreview(asset, directory);
-  } catch (error) { ElMessage.error(error instanceof Error ? error.message : "GPT 会员生图失败"); }
-  finally { gptImageGenerating.value = false; }
+    generatedImageId.value = asset.id;
+    if (targetShot) targetShot.aspectRatio = image.aspectRatio;
+    generatedImagePersisted.value = await save();
+    if (!generatedImagePersisted.value) {
+      const assetIndex = targetProject.assets.findIndex(item => item.id === asset.id);
+      if (assetIndex >= 0) targetProject.assets.splice(assetIndex, 1);
+      generatedImageId.value = previousGeneratedImageId;
+      if (targetShot) targetShot.aspectRatio = previousShotAspectRatio;
+    }
+  } finally { imageAssetSaving.value = false; }
 }
-async function confirmGeneratedImage() {
-  if (!gptGeneratedAsset.value || !shotDraft.value) return;
-  shotDraft.value.firstFrameAssetId = gptGeneratedAsset.value.id;
-  shotDraft.value.referenceAssetIds = [...new Set([...(shotDraft.value.referenceAssetIds ?? []), ...gptReferenceAssetIds.value])];
+async function persistCharacterImage(image: GeneratedImageResult) {
+  const character = characterDraft.value;
+  if (!character || !characterDetailVisible.value) return;
+  await persistGeneratedImage(image, { characterId: character.id }, character.name || "人物");
+}
+async function persistSceneImage(image: GeneratedImageResult) {
+  const scene = sceneDraft.value;
+  if (!scene || !sceneDetailVisible.value || !currentEpisode.value) return;
+  await persistGeneratedImage(image, { episodeId: currentEpisode.value.id, sceneId: scene.id }, scene.heading || "场景");
+}
+async function persistShotImage(image: GeneratedImageResult) {
+  const shot = shotDraft.value;
+  if (!shot || !shotDetailVisible.value || !currentEpisode.value) return;
+  await persistGeneratedImage(image, { episodeId: currentEpisode.value.id, sceneId: shot.sceneId, shotId: shot.id }, shot.number);
+}
+async function saveImageReferences(assets: DramaAsset[], association: ImageAssociation) {
+  const targetProject = project.value;
+  if (!targetProject || imageAssetSaving.value) return;
+  imageAssetSaving.value = true;
+  try {
+    const references = assets.map(asset => ({ ...asset, projectId: targetProject.id, ...association }));
+    targetProject.assets.push(...references);
+    const last = references.at(-1);
+    if (last?.characterId) {
+      const character = targetProject.characters.find(item => item.id === last.characterId);
+      if (character) { character.referencePath = last.referencePath; if (characterDraft.value?.id === character.id) characterDraft.value.referencePath = last.referencePath; }
+    }
+    if (last?.sceneId) {
+      const scene = currentEpisode.value?.scenes.find(item => item.id === last.sceneId);
+      if (scene) scene.referenceAssetId = last.id;
+      if (sceneDraft.value?.id === last.sceneId) sceneDraft.value.referenceAssetId = last.id;
+    }
+    if (last?.shotId) {
+      const shot = currentEpisode.value?.shots.find(item => item.id === last.shotId);
+      if (shot) shot.referenceAssetIds = [...new Set([...(shot.referenceAssetIds ?? []), ...references.map(item => item.id)])];
+      if (shotDraft.value?.id === last.shotId) shotDraft.value.referenceAssetIds = [...new Set([...(shotDraft.value.referenceAssetIds ?? []), ...references.map(item => item.id)])];
+    }
+    await save();
+  } finally { imageAssetSaving.value = false; }
+}
+function saveCharacterReferences(assets: DramaAsset[]) { return characterDraft.value ? saveImageReferences(assets, { characterId: characterDraft.value.id }) : undefined; }
+function saveSceneReferences(assets: DramaAsset[]) { return sceneDraft.value && currentEpisode.value ? saveImageReferences(assets, { episodeId: currentEpisode.value.id, sceneId: sceneDraft.value.id }) : undefined; }
+function saveShotReferences(assets: DramaAsset[]) { return shotDraft.value && currentEpisode.value ? saveImageReferences(assets, { episodeId: currentEpisode.value.id, sceneId: shotDraft.value.sceneId, shotId: shotDraft.value.id }) : undefined; }
+async function useCharacterImage(path: string) {
+  const character = characterDraft.value;
+  const target = project.value?.characters.find(item => item.id === character?.id);
+  if (!character || !target || !project.value?.assets.some(item => item.characterId === character.id && item.referencePath === path)) return;
+  target.referencePath = path;
+  character.referencePath = path;
+  await save();
+}
+async function useSceneImage(path: string) {
+  const scene = sceneDraft.value;
+  const target = currentEpisode.value?.scenes.find(item => item.id === scene?.id);
+  const asset = project.value?.assets.find(item => item.sceneId === scene?.id && item.referencePath === path);
+  if (!scene || !target || !asset) return;
+  target.referenceAssetId = asset.id;
+  scene.referenceAssetId = asset.id;
+  await save();
+}
+async function useShotImage(path: string) {
+  const shot = shotDraft.value;
+  const asset = project.value?.assets.find(item => item.shotId === shot?.id && item.referencePath === path);
+  if (!shot || !asset) return;
+  shot.firstFrameAssetId = asset.id;
+  shot.referenceAssetIds = [...new Set([...(shot.referenceAssetIds ?? []), ...(asset.referenceAssetIds ?? [])])];
+  shot.aspectRatio = asset.requestedAspectRatio ?? shot.aspectRatio;
   await saveShotDetail();
 }
 async function saveShotDetail() {
   const target = currentEpisode.value?.shots.find(item => item.id === shotDraft.value?.id);
   if (!target || !shotDraft.value) return;
+  shotDraft.value.imagePrompt = shotImagePrompt.value;
   const original = { ...target };
   Object.assign(target, shotDraft.value, { status: shotDraft.value.reviewStatus ?? "草稿" });
   if (await save()) shotDetailVisible.value = false;
@@ -713,10 +705,33 @@ function applyBatchReviewStatus() {
   void save();
 }
 function sceneTitle(sceneId: string) { return currentEpisode.value?.scenes.find(item => item.id === sceneId)?.heading || "未关联场景"; }
+function sceneImageLabel(scene: DramaScene) {
+  const linked = imageAssets.value.filter(item => item.sceneId === scene.id);
+  return (linked.find(item => item.id === scene.referenceAssetId) ?? linked.at(-1))?.name || "未设置";
+}
+function openCharacterDetail(character: DramaCharacter) {
+  characterDraft.value = { ...character };
+  characterImagePrompt.value = makeCharacterPrompt(character);
+  characterImageRatio.value = "1:1";
+  generatedImageId.value = "";
+  generatedImagePersisted.value = false;
+  characterDetailVisible.value = true;
+}
+function makeCharacterPrompt(character: DramaCharacter) {
+  return ["短剧人物设定图，单人全身或半身角色设计，清晰表现人物辨识特征。", character.name && `人物：${character.name}`, character.description && `身份及性格：${character.description}`, character.appearance && `外貌描述：${character.appearance}`, project.value?.style && `画面风格：${project.value.style}`].filter(Boolean).join("\n");
+}
+async function saveCharacterDetail() {
+  const target = project.value?.characters.find(item => item.id === characterDraft.value?.id);
+  if (!target || !characterDraft.value) return;
+  Object.assign(target, characterDraft.value);
+  if (await save()) characterDetailVisible.value = false;
+}
 function addCharacter() {
   if (!project.value) return;
   const character: DramaCharacter = { id: crypto.randomUUID(), name: "", description: "", appearance: "", referencePath: "", version: 1 };
-  project.value.characters.push(character); void save();
+  project.value.characters.push(character);
+  openCharacterDetail(character);
+  void save();
 }
 function addAsset(kind: DramaAsset["kind"]) {
   if (!project.value) return;
@@ -814,16 +829,14 @@ function formatDate(value: string) { return new Date(value).toLocaleString("zh-C
 .batchBar, .versionCompareControls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 .compareColumns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; max-height: 70vh; overflow: auto; section { min-width: 0; border: 1px solid var(--el-border-color-lighter); border-radius: 5px; padding: 12px; } h3 { margin: 0 0 10px; font-size: 14px; } pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.6; } }
 .shotDetailForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; .el-form-item:has(textarea) { grid-column: 1 / -1; } }
-.gptImagePanel { display: grid; gap: 10px; width: 100%; padding: 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; }
-.gptImageAuth, .gptImageActions, .gptImageUpload { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.gptImageAuth { justify-content: space-between; font-size: 13px; }
-.gptImageNote { margin: 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.55; }
-.gptImageActions > span, .gptImageUpload > span { color: var(--el-text-color-secondary); font-size: 12px; }
-.gptImagePreview { display: grid; justify-items: start; gap: 8px; img { display: block; max-width: 100%; max-height: 320px; object-fit: contain; border-radius: 4px; } > div { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--el-text-color-secondary); } }
+.entityDetailForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; .wideFormItem, .el-collapse { grid-column: 1 / -1; } }
+.shotDetailForm .wideFormItem { grid-column: 1 / -1; }
+.tableSubtext { display: block; margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; }
+.tableDescription { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; white-space: normal; }
 .canvasEntry { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 100px; p { max-width: 680px; margin: 8px 0 0; color: var(--el-text-color-secondary); font-size: 13px; } }
 .capabilityNote { margin-block: 12px 18px; }
 .assetTabs { margin-block: 8px 12px; }
 @media (max-width: 1200px) { .dramaLayout { grid-template-columns: 180px minmax(0, 1fr) 280px; } .dramaLayout.assistantCollapsed { grid-template-columns: 180px minmax(0, 1fr) 44px; } .dramaContent { padding: 12px; } }
 @media (max-width: 900px) { .dramaLayout { grid-template-columns: 160px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 340px; } .dramaLayout.assistantCollapsed { grid-template-rows: minmax(0, 1fr) 48px; } .assistantPane { grid-column: 1 / -1; grid-row: 2; border-inline-start: 0; border-top: 1px solid var(--el-border-color-lighter); } .assistantPane.collapsed { width: auto; } .collapsed .assistantHeader { flex-direction: row; padding: 4px 10px; } .topbarMeta { display: none; } }
-@media (max-width: 700px) { .dramaHeader { align-items: flex-start; flex-direction: column; padding: 12px 16px; } .headerActions { flex-wrap: wrap; } .workspaceTopbar > div:first-child { flex-direction: column; gap: 2px; } .dramaLayout { grid-template-columns: 135px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 320px; } .dramaLayout.assistantCollapsed { grid-template-rows: minmax(0, 1fr) 46px; } .dramaContent { padding: 8px; } .contentPanel { padding: 12px; } .overviewGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .compareColumns, .shotDetailForm { grid-template-columns: minmax(0, 1fr); } .panelHeading { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 700px) { .dramaHeader { align-items: flex-start; flex-direction: column; padding: 12px 16px; } .headerActions { flex-wrap: wrap; } .workspaceTopbar > div:first-child { flex-direction: column; gap: 2px; } .dramaLayout { grid-template-columns: 135px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 320px; } .dramaLayout.assistantCollapsed { grid-template-rows: minmax(0, 1fr) 46px; } .dramaContent { padding: 8px; } .contentPanel { padding: 12px; } .overviewGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .compareColumns, .shotDetailForm, .entityDetailForm { grid-template-columns: minmax(0, 1fr); } .panelHeading { align-items: flex-start; flex-direction: column; } }
 </style>

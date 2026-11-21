@@ -10,12 +10,12 @@ export type DramaWorkspaceFiles = {
 };
 export type DramaSeason = { id: string; name: string; episodes: string[] };
 export type DramaEpisode = { id: string; seasonId: string; number: number; title: string; outline: string; scriptVersion: number; scriptPath?: string; draftPath?: string; formalVersionId?: string; status: DramaStatus; scenes: DramaScene[]; shots: DramaShot[] };
-export type DramaScene = { id: string; number: number; order?: number; archived?: boolean; sourceScriptVersionId?: string; heading: string; time: string; location: string; interiorExterior?: "内景" | "外景"; dayPart?: "白天" | "夜晚" | "黄昏" | "清晨"; characters: string[]; charactersText: string; description: string };
+export type DramaScene = { id: string; number: number; order?: number; archived?: boolean; sourceScriptVersionId?: string; heading: string; time: string; location: string; interiorExterior?: "内景" | "外景"; dayPart?: "白天" | "夜晚" | "黄昏" | "清晨"; characters: string[]; charactersText: string; description: string; referenceAssetId?: string };
 export type DramaShot = { id: string; number: string; order?: number; sceneId: string; description: string; action: string; expression: string; size: string; angle: string; composition?: string; movement: string; dialogue: string; sound: string; duration: number; imagePrompt?: string; videoPrompt?: string; referencePath: string; firstFrameAssetId?: string; lastFrameAssetId?: string; referenceAssetIds?: string[]; aspectRatio?: string; productionStatus?: DramaProductionStatus; reviewStatus?: DramaStatus; status: DramaStatus };
 export type DramaCharacter = { id: string; name: string; description: string; appearance: string; referencePath: string; version: number };
 export type DramaAsset = { id: string; kind: "scene" | "prop" | "image"; name: string; description: string; referencePath: string; version: number;
   generatedBy?: "gptImageSubscription"; modelId?: string; generatedAt?: string; requestedAspectRatio?: string; width?: number; height?: number;
-  referenceAssetIds?: string[]; projectId?: string; episodeId?: string; sceneId?: string; shotId?: string };
+  referenceAssetIds?: string[]; projectId?: string; episodeId?: string; sceneId?: string; shotId?: string; characterId?: string };
 export type DramaScriptVersion = { id: string; version: number; path: string; createdAt: string; status: DramaStatus };
 export type DramaProject = { schemaVersion: 1; id: string; name: string; genre: string; style: string; storyOutline: string; targetEpisodes: number; targetDuration: number; createdAt: string; updatedAt: string; seasons: DramaSeason[]; episodes: DramaEpisode[]; characters: DramaCharacter[]; assets: DramaAsset[]; scriptVersions: Record<string, DramaScriptVersion[]> };
 
