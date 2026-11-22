@@ -16,7 +16,7 @@ export type DramaCanvasBinding = {
   order?: number;
 };
 export type DramaCanvasRelation = {
-  kind: "scriptScene" | "sceneShot" | "characterShot" | "shotImageGenerator" | "generatorImageAsset";
+  kind: "scriptScene" | "scriptCharacter" | "sceneShot" | "characterShot" | "shotImageGenerator" | "generatorImageAsset";
   projectId: string;
   episodeId: string;
   scriptVersionId?: string;
@@ -25,6 +25,7 @@ export type DramaCanvasRelation = {
   shotId?: string;
   assetId?: string;
 };
+export type DramaCanvasRelationChange = { relation: DramaCanvasRelation; connected: boolean };
 export type DramaCanvasState = { directory: string; manifestPath: string; episodeId: string; project: DramaProject };
 export const dramaCanvasStateKey: InjectionKey<ShallowRef<DramaCanvasState | undefined>> = Symbol("dramaCanvasState");
 
@@ -33,8 +34,14 @@ export function dramaCharacterDisplayName(character: Pick<DramaCharacter, "name"
 }
 
 export const dramaNodeHandles: Record<DramaCanvasRole, NodeHandle[]> = {
-  script: [{ id: "script", type: "source", dataType: "DRAMA_SCRIPT", label: "正式剧本" }],
-  character: [{ id: "character", type: "source", dataType: "DRAMA_CHARACTER", label: "人物" }],
+  script: [
+    { id: "script", type: "source", dataType: "DRAMA_SCRIPT", label: "正式剧本" },
+    { id: "characters", type: "source", dataType: "DRAMA_CHARACTER", label: "人物" },
+  ],
+  character: [
+    { id: "script", type: "target", dataType: "DRAMA_CHARACTER", label: "剧本人物" },
+    { id: "character", type: "source", dataType: "DRAMA_CHARACTER", label: "人物" },
+  ],
   scene: [
     { id: "script", type: "target", dataType: "DRAMA_SCRIPT", label: "剧本" },
     { id: "scene", type: "source", dataType: "DRAMA_SCENE", label: "场景" },
@@ -74,13 +81,26 @@ export function dramaCanvasBindingKey(binding: DramaCanvasBinding) {
   return `${binding.role}:${binding.projectId}:${binding.episodeId}:${identity ?? ""}`;
 }
 
+export function dramaCanvasNodeId(binding: DramaCanvasBinding) {
+  return `dramaNode:${encodeURIComponent(dramaCanvasBindingKey(binding))}`;
+}
+
+export function dramaCanvasEdgeId(source: string, sourceHandle: string, target: string, targetHandle: string) {
+  return `dramaEdge:${encodeURIComponent(`${source}|${sourceHandle}|${target}|${targetHandle}`)}`;
+}
+
+export function isDramaCanvasRelationKind(value: unknown): value is DramaCanvasRelation["kind"] {
+  return ["scriptScene", "scriptCharacter", "sceneShot", "characterShot", "shotImageGenerator", "generatorImageAsset"].includes(String(value));
+}
+
 export function resolveDramaCanvasRelation(sourceNode: Pick<GraphNode, "data">, targetNode: Pick<GraphNode, "data">): DramaCanvasRelation | undefined {
   const source = readDramaCanvasBinding(sourceNode.data);
   const target = readDramaCanvasBinding(targetNode.data);
   if (!source || !target || source.projectId !== target.projectId || source.episodeId !== target.episodeId) return;
   if (source.role === "script" && target.role === "scene") return { kind: "scriptScene", projectId: source.projectId, episodeId: source.episodeId, scriptVersionId: source.scriptVersionId, sceneId: target.sceneId };
-  if (source.role === "scene" && target.role === "shot" && source.sceneId === target.sceneId) return { kind: "sceneShot", projectId: source.projectId, episodeId: source.episodeId, sceneId: source.sceneId, shotId: target.shotId };
+  if (source.role === "script" && target.role === "character") return { kind: "scriptCharacter", projectId: source.projectId, episodeId: source.episodeId, characterId: target.characterId };
+  if (source.role === "scene" && target.role === "shot") return { kind: "sceneShot", projectId: source.projectId, episodeId: source.episodeId, sceneId: source.sceneId, shotId: target.shotId };
   if (source.role === "character" && target.role === "shot") return { kind: "characterShot", projectId: source.projectId, episodeId: source.episodeId, characterId: source.characterId, shotId: target.shotId };
   if (source.role === "shot" && target.role === "gptImage" && source.shotId === target.shotId) return { kind: "shotImageGenerator", projectId: source.projectId, episodeId: source.episodeId, shotId: source.shotId };
-  if (source.role === "gptImage" && target.role === "imageAsset" && source.shotId === target.shotId) return { kind: "generatorImageAsset", projectId: source.projectId, episodeId: source.episodeId, shotId: source.shotId, assetId: target.assetId };
+  if (source.role === "gptImage" && target.role === "imageAsset") return { kind: "generatorImageAsset", projectId: source.projectId, episodeId: source.episodeId, shotId: source.shotId, assetId: target.assetId };
 }

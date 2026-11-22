@@ -9,9 +9,9 @@ export type DramaWorkspaceFiles = {
   mkdir(path: string): Promise<void>;
 };
 export type DramaSeason = { id: string; name: string; episodes: string[] };
-export type DramaEpisode = { id: string; seasonId: string; number: number; title: string; outline: string; scriptVersion: number; scriptPath?: string; draftPath?: string; formalVersionId?: string; status: DramaStatus; scenes: DramaScene[]; shots: DramaShot[] };
+export type DramaEpisode = { id: string; seasonId: string; number: number; title: string; outline: string; scriptVersion: number; scriptPath?: string; draftPath?: string; formalVersionId?: string; characterIds?: string[]; status: DramaStatus; scenes: DramaScene[]; shots: DramaShot[] };
 export type DramaScene = { id: string; number: number; order?: number; archived?: boolean; sourceScriptVersionId?: string; heading: string; time: string; location: string; interiorExterior?: "内景" | "外景"; dayPart?: "白天" | "夜晚" | "黄昏" | "清晨"; characters: string[]; charactersText: string; description: string; referenceAssetId?: string };
-export type DramaShot = { id: string; number: string; order?: number; sceneId: string; description: string; action: string; expression: string; size: string; angle: string; composition?: string; movement: string; dialogue: string; sound: string; duration: number; imagePrompt?: string; videoPrompt?: string; referencePath: string; firstFrameAssetId?: string; lastFrameAssetId?: string; referenceAssetIds?: string[]; aspectRatio?: string; productionStatus?: DramaProductionStatus; reviewStatus?: DramaStatus; status: DramaStatus };
+export type DramaShot = { id: string; number: string; order?: number; sceneId: string; characterIds?: string[]; description: string; action: string; expression: string; size: string; angle: string; composition?: string; movement: string; dialogue: string; sound: string; duration: number; imagePrompt?: string; videoPrompt?: string; referencePath: string; firstFrameAssetId?: string; lastFrameAssetId?: string; referenceAssetIds?: string[]; aspectRatio?: string; productionStatus?: DramaProductionStatus; reviewStatus?: DramaStatus; status: DramaStatus };
 export type DramaCharacter = { id: string; name: string; description: string; appearance: string; referencePath: string; version: number };
 export type DramaAsset = { id: string; kind: "scene" | "prop" | "image"; name: string; description: string; referencePath: string; version: number;
   generatedBy?: "gptImageSubscription"; modelId?: string; generatedAt?: string; requestedAspectRatio?: string; width?: number; height?: number;
@@ -236,10 +236,11 @@ export async function createEpisode(files: DramaWorkspaceFiles, project: DramaPr
   return episode;
 }
 
-export async function updateEpisode(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, patch: Partial<Pick<DramaEpisode, "title" | "outline" | "status">>, manifestPath: string) {
+export async function updateEpisode(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, patch: Partial<Pick<DramaEpisode, "title" | "outline" | "status" | "characterIds">>, manifestPath: string) {
   const snapshot = cloneProject(project);
   const episode = snapshot.episodes.find(item => item.id === episodeId);
   if (!episode) throw new Error("目标分集不存在");
+  if (patch.characterIds && patch.characterIds.some(id => !snapshot.characters.some(character => character.id === id))) throw new Error("分集人物关联必须使用此项目中的稳定人物 ID");
   Object.assign(episode, patch);
   await saveProjectSnapshot(files, snapshot, manifestPath);
   Object.assign(project, snapshot);
@@ -265,8 +266,10 @@ export async function createScene(files: DramaWorkspaceFiles, project: DramaProj
 
 export async function updateScene(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, sceneId: string, patch: Partial<Omit<DramaScene, "id" | "number">>, manifestPath: string) {
   const snapshot = cloneProject(project);
-  const scene = snapshot.episodes.find(item => item.id === episodeId)?.scenes.find(item => item.id === sceneId);
+  const episode = snapshot.episodes.find(item => item.id === episodeId);
+  const scene = episode?.scenes.find(item => item.id === sceneId);
   if (!scene) throw new Error("目标场景不存在或不属于指定分集");
+  if (patch.sourceScriptVersionId && !snapshot.scriptVersions[episodeId]?.some(version => version.id === patch.sourceScriptVersionId)) throw new Error("场景剧本关联必须使用此分集中的稳定剧本版本 ID");
   Object.assign(scene, patch);
   await saveProjectSnapshot(files, snapshot, manifestPath);
   Object.assign(project, snapshot);
@@ -301,6 +304,7 @@ export async function updateShot(files: DramaWorkspaceFiles, project: DramaProje
   const shot = episode?.shots.find(item => item.id === shotId);
   if (!episode || !shot) throw new Error("目标镜头不存在或不属于指定分集");
   if (patch.sceneId && !episode.scenes.some(item => item.id === patch.sceneId && !item.archived)) throw new Error("镜头必须关联此分集内未归档的场景");
+  if (patch.characterIds && patch.characterIds.some(id => !project.characters.some(character => character.id === id))) throw new Error("镜头人物关联必须使用此项目中的稳定人物 ID");
   Object.assign(shot, patch);
   validateShotAssetLinks(project, shot);
   await saveProjectSnapshot(files, snapshot, manifestPath);

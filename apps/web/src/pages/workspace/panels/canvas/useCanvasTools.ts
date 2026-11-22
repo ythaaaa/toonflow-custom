@@ -10,7 +10,8 @@ import http from "@/lib/http";
 import { confirmPluginInstall } from "@/lib/pluginInstallConfirmation";
 import { openPluginUploadKey } from "@/components/settings/panels/pluginMarket/marketUpload";
 import { useWorkspaceStore } from "@/stores/workspace";
-import { readDramaCanvasBinding, resolveDramaCanvasRelation } from "@/lib/dramaCanvas";
+import { dramaCanvasEdgeId, isDramaCanvasRelationKind, readDramaCanvasBinding, resolveDramaCanvasRelation, type DramaCanvasRelationChange } from "@/lib/dramaCanvas";
+import type { DramaProject } from "@/lib/dramaWorkspace";
 import { agentNodeToolPermissions } from "@/stores/settings";
 import { arrangeCanvas } from "./arrangeCanvas";
 import { canvasEdgeSummary, canvasNodeSummary, createCanvasQueries, isCanvasRead } from "./canvasQueries";
@@ -28,6 +29,8 @@ export function useCanvasTools(options: {
   };
   getCanvasBinding(): { id: string; signal: AbortSignal };
   resolveCanvasContext?(id: string): CanvasContext | undefined;
+  persistDramaRelations?(changes: DramaCanvasRelationChange[]): Promise<DramaProject | undefined>;
+  syncDramaCanvas?(project: DramaProject, episodeId: string, expectedCanvasId: string): Promise<void>;
 }) {
   const flow = useVueFlow();
   const workspaceStore = useWorkspaceStore();
@@ -265,7 +268,7 @@ export function useCanvasTools(options: {
           if (!validateConnection(connection, { sourceNode, targetNode, nodes: flow.getNodes.value, edges })) {
             throw new Error(`连接无效：${connection.source} -> ${connection.target}，请检查端口方向、数据类型以及目标节点的连接规则`);
           }
-          const id = crypto.randomUUID();
+          const id = dramaRelation ? dramaCanvasEdgeId(connection.source, connection.sourceHandle, connection.target, connection.targetHandle) : crypto.randomUUID();
           // ACT: 候选边只参与本批校验，全部通过后再一次提交画布。
           edges.push({
             ...connection, id, type: "default", selected: false, data: dramaRelation ? { dramaRelation } : {}, events: {}, sourceNode, targetNode,
@@ -274,12 +277,24 @@ export function useCanvasTools(options: {
           });
           return { id, connection, isNew: true, existing: undefined, dramaRelation };
         });
-        entries.forEach(entry => {
-          if (!entry.isNew && entry.dramaRelation && entry.existing) entry.existing.data = { ...(entry.existing.data ?? {}), dramaRelation: entry.dramaRelation };
-        });
-        flow.addEdges(entries.filter(entry => entry.isNew).map(entry => ({ id: entry.id, ...entry.connection, ...(entry.dramaRelation ? { data: { dramaRelation: entry.dramaRelation } } : {}) })));
+        const relationChanges = entries.filter(entry => entry.isNew && entry.dramaRelation).map(entry => ({ relation: entry.dramaRelation!, connected: true }));
+        if (relationChanges.length) {
+          if (!options.persistDramaRelations || !options.syncDramaCanvas) throw new Error("短剧关系保存入口不可用");
+          const expectedCanvasId = options.getCanvasBinding().id;
+          const saved = await options.persistDramaRelations(relationChanges);
+          signal.throwIfAborted();
+          if (!saved) throw new Error("短剧关系保存未返回业务数据");
+          await options.syncDramaCanvas(saved, relationChanges[0]!.relation.episodeId, expectedCanvasId);
+        }
+        flow.addEdges(entries.filter(entry => entry.isNew && !entry.dramaRelation).map(entry => ({ id: entry.id, ...entry.connection })));
         await nextTick();
-        return { edges: entries.map(entry => canvasEdgeSummary(flow.findEdge(entry.id)!)) };
+        const summaries = entries.map(entry => {
+          const edge = flow.getEdges.value.find(item => item.source === entry.connection.source && item.target === entry.connection.target
+            && item.sourceHandle === entry.connection.sourceHandle && item.targetHandle === entry.connection.targetHandle);
+          if (!edge) throw new Error("连线已保存业务关系，但画布未能恢复对应边");
+          return canvasEdgeSummary(edge);
+        });
+        return { edges: summaries };
       }
       case "deleteEdges": {
         const { edgeIds } = canvasSchemas.deleteEdges.parse(request.args);
@@ -288,11 +303,26 @@ export function useCanvasTools(options: {
           if (!edge) throw new Error(`连线不存在：${edgeId}`);
           if (edge.deletable === false) throw new Error(`连线不允许删除：${edgeId}`);
         });
+        const relations = edgeIds.flatMap(edgeId => {
+          const edge = flow.findEdge(edgeId)!;
+          const relation = (edge.data as { dramaRelation?: { kind?: unknown } } | undefined)?.dramaRelation;
+          if (!relation) return [];
+          if (!isDramaCanvasRelationKind(relation.kind)) throw new Error(`短剧连线类型当前不支持解除：${edgeId}`);
+          return [{ relation: relation as DramaCanvasRelationChange["relation"], connected: false }];
+        });
         const nodeIds = [...new Set(edgeIds.flatMap(id => {
           const edge = flow.findEdge(id)!;
           return [edge.source, edge.target];
         }))];
-        flow.removeEdges(edgeIds);
+        if (relations.length) {
+          if (!options.persistDramaRelations || !options.syncDramaCanvas) throw new Error("短剧关系解除入口不可用");
+          const expectedCanvasId = options.getCanvasBinding().id;
+          const saved = await options.persistDramaRelations(relations);
+          signal.throwIfAborted();
+          if (!saved) throw new Error("短剧关系解除未返回业务数据");
+          await options.syncDramaCanvas(saved, relations[0]!.relation.episodeId, expectedCanvasId);
+        }
+        flow.removeEdges(edgeIds.filter(edgeId => !((flow.findEdge(edgeId)?.data as { dramaRelation?: unknown } | undefined)?.dramaRelation)));
         await nextTick();
         return { edgeIds, nodes: nodeIds.map(id => nodeInfo(id)) };
       }
