@@ -5,9 +5,24 @@
     <div class="gptImageOptions">
       <el-select :modelValue="aspectRatio" aria-label="生图画幅" @update:modelValue="emit('update:aspectRatio', $event)"><el-option label="1:1 方形" value="1:1" /><el-option label="16:9 横屏" value="16:9" /><el-option label="9:16 竖屏" value="9:16" /></el-select>
       <el-select v-model="selectedReferenceIds" multiple clearable filterable placeholder="从当前项目素材库选择参考图"><el-option v-for="item in referenceOptions" :key="item.id" :label="item.label" :value="item.id" /></el-select>
+      <div v-if="selectedReferenceOptions.length" class="selectedReferences" aria-label="本次选中的参考图片">
+        <div v-for="item in selectedReferenceOptions" :key="item.id" class="selectedReference">
+          <span class="referenceText"><strong>{{ item.label }}</strong><small>{{ item.source || "本次参考" }}</small></span>
+          <el-button text size="small" @click="previewReference(item)">预览</el-button>
+          <el-button text size="small" @click="removeReference(item.id)">移除</el-button>
+        </div>
+      </div>
       <div class="gptImageUpload"><input type="file" accept="image/png,image/jpeg,image/webp" multiple :disabled="referenceUploading || saving" @change="uploadReferences" /><span>上传参考图：PNG / JPEG / WebP，单张不超过 12 MB</span></div>
     </div>
-    <div class="gptImageActions"><el-button type="primary" :disabled="!status.authenticated || !prompt.trim() || generating || saving || referenceUploading" :loading="generating || saving" @click="generate">{{ generating ? "正在生成…" : saving ? "正在保存素材…" : generatedImage ? "重新生成" : selectedReferenceIds.length ? "参考图编辑" : "生成图片" }}</el-button><span v-if="generating">请求已提交，等待订阅服务返回图片。</span><span v-else-if="generatedImage && generatedPersisted">生成成功，已保存到项目素材库。</span><span v-else-if="generatedImage && saving">图片已生成，正在保存关联信息。</span><span v-else-if="generatedImage">图片已生成，但项目关联尚未保存；请检查工作区权限后重试。</span><span v-else>固定模型 gpt-image-2.6-flare；质量请求为 auto。</span></div>
+    <section class="generationConfirm" aria-label="生图前确认">
+      <strong>生成前确认</strong>
+      <div><span>当前镜头</span><b>{{ generationTarget || "未指定" }}</b></div>
+      <div><span>画幅比例</span><b>{{ aspectRatio }}</b></div>
+      <div><span>会员授权</span><b>{{ statusState === "loading" ? "读取中…" : statusState === "error" ? "状态暂不可用" : status.authenticated ? "已连接" : "未授权" }}</b></div>
+      <div><span>本次参考图</span><b>{{ selectedReferenceOptions.length ? selectedReferenceOptions.map(item => item.label).join("、") : "无" }}</b></div>
+      <div class="confirmedPrompt"><span>生图提示词</span><p>{{ prompt || "请输入提示词" }}</p></div>
+    </section>
+    <div class="gptImageActions"><el-button type="primary" :disabled="statusState !== 'ready' || !status.authenticated || !prompt.trim() || generating || saving || referenceUploading" :loading="generating || saving" @click="generate">{{ generating ? "正在生成…" : saving ? "正在保存素材…" : generatedImage ? "重新生成" : selectedReferenceIds.length ? "参考图编辑" : "生成图片" }}</el-button><span v-if="generating">请求已提交，等待订阅服务返回图片。</span><span v-else-if="generatedImage && generatedPersisted">生成成功，已保存到项目素材库。</span><span v-else-if="generatedImage && saving">图片已生成，正在保存关联信息。</span><span v-else-if="generatedImage">图片已生成，但项目关联尚未保存；请检查工作区权限后重试。</span><span v-else>模型 {{ status.model || "读取中" }}；质量请求为 auto。</span></div>
     <el-alert v-if="generationError" type="error" :closable="false" :title="generationError" />
     <div v-if="previewUrl" class="gptImagePreview"><img :src="previewUrl" alt="GPT 会员生图预览" /><div><span>{{ previewLabel }}</span><el-button v-if="generatedImage" size="small" type="primary" :disabled="!generatedPersisted || saving" :loading="saving" @click="emit('useImage', generatedImage.path)">使用图片</el-button></div></div>
   </div>
@@ -20,8 +35,8 @@ import http from "@/lib/http";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
 import type { DramaAsset } from "@/lib/dramaWorkspace";
 
-type ReferenceOption = { id: string; label: string; referencePath: string };
-type GeneratedImage = { path: string; mimeType: string; prompt: string; aspectRatio: string; referenceAssetIds: string[]; width?: number; height?: number };
+type ReferenceOption = { id: string; label: string; referencePath: string; source?: string; kind?: "asset" | "character" | "legacy"; referenceId?: string };
+type GeneratedImage = { path: string; mimeType: string; prompt: string; aspectRatio: string; modelId: string; referenceAssetIds: string[]; width?: number; height?: number };
 
 const props = defineProps<{
   projectId: string;
@@ -32,6 +47,7 @@ const props = defineProps<{
   initialReferenceAssetIds?: string[];
   initialImagePath?: string;
   initialImageLabel?: string;
+  generationTarget?: string;
   initialGeneratedImage?: GeneratedImage;
   generatedPersisted: boolean;
   saving: boolean;
@@ -59,6 +75,10 @@ let releasePreview: (() => void) | undefined;
 let previewRequest = 0;
 
 const referenceOptions = computed(() => [...new Map<string, ReferenceOption>([...props.referenceOptions, ...uploadedReferences.value].map(item => [item.id, item] as const)).values()]);
+const selectedReferenceOptions = computed(() => selectedReferenceIds.value.flatMap(id => {
+  const item = referenceOptions.value.find(option => option.id === id);
+  return item ? [item] : [];
+}));
 
 watch(() => [props.directory, props.initialImagePath, props.initialImageLabel] as const, ([directory, path, label]) => {
   if (!generatedImage.value) void setPreview(path, label || "当前关联图片", directory);
@@ -69,9 +89,17 @@ watch(() => props.initialGeneratedImage, image => {
   const dimensions = image.width && image.height ? `${image.width} × ${image.height}` : "生成预览";
   void setPreview(image.path, `${image.aspectRatio} · ${dimensions}`);
 }, { immediate: true });
-watch(() => [props.initialReferenceAssetIds ?? [], props.referenceOptions.map(item => item.id)] as const, ([ids, availableIds]) => {
+watch(() => props.initialReferenceAssetIds ?? [], ids => {
+  const options = referenceOptions.value;
+  selectedReferenceIds.value = [...new Set(ids.flatMap(id => {
+    const matches = options.filter(item => (item.referenceId ?? item.id) === id);
+    const preferred = matches.find(item => item.kind === "asset") ?? matches[0];
+    return preferred ? [preferred.id] : [];
+  }))];
+}, { immediate: true, deep: true });
+watch(() => referenceOptions.value.map(item => item.id), availableIds => {
   const available = new Set(availableIds);
-  selectedReferenceIds.value = ids.filter(id => available.has(id));
+  selectedReferenceIds.value = selectedReferenceIds.value.filter(id => available.has(id));
 }, { immediate: true, deep: true });
 onMounted(refreshStatus);
 onScopeDispose(() => releasePreview?.());
@@ -163,6 +191,12 @@ async function setPreview(path?: string, label = "", directory = props.directory
     previewLabel.value = label;
   } catch (error) { acquired.release(); ElMessage.error(error instanceof Error ? error.message : "读取图片预览失败"); }
 }
+function previewReference(item: ReferenceOption) {
+  void setPreview(item.referencePath, `${item.source || "参考图片"} · ${item.label}`);
+}
+function removeReference(id: string) {
+  selectedReferenceIds.value = selectedReferenceIds.value.filter(item => item !== id);
+}
 async function imageDimensions(url: string) {
   return new Promise<{ width: number; height: number } | undefined>(resolve => {
     const image = new Image();
@@ -173,17 +207,21 @@ async function imageDimensions(url: string) {
 }
 async function generate() {
   if (!props.prompt.trim() || generating.value || props.saving) return;
+  if (statusState.value !== "ready") { ElMessage.warning("GPT 会员授权状态暂不可用，请确认状态后再生成"); return; }
   if (!status.value.authenticated) { ElMessage.warning("请先完成独立 ChatGPT 授权"); return; }
   const selected = referenceOptions.value.filter(item => selectedReferenceIds.value.includes(item.id));
   if (selected.some(item => !imageMimeType(item.referencePath))) { ElMessage.error("参考素材需要使用 PNG、JPEG 或 WebP 文件"); return; }
+  if (selected.length > 5) { ElMessage.error("GPT 会员生图每次最多使用 5 张参考图，请先取消多余图片"); return; }
+  const uniqueSelected = [...new Map(selected.map(item => [item.referencePath, item])).values()];
+  if (!status.value.model) { ElMessage.error("未能读取 GPT 生图模型信息，请检查会员授权状态"); return; }
   generating.value = true;
   generatedImage.value = undefined;
   generationError.value = "";
   try {
     const generated = await http<{ path: string; mimeType: string; mediaType: "image" }[]>({
       method: "POST", url: "/api/ai/media/generate", timeout: 240000,
-      data: { directory: props.directory, mediaType: "image", providerId: "gptImageSubscription", modelId: "gpt-image-2.6-flare", prompt: props.prompt,
-        ratio: props.aspectRatio, images: selected.map(item => ({ path: item.referencePath, mimeType: imageMimeType(item.referencePath) })),
+      data: { directory: props.directory, mediaType: "image", providerId: "gptImageSubscription", modelId: status.value.model, prompt: props.prompt,
+        ratio: props.aspectRatio, images: uniqueSelected.map(item => ({ path: item.referencePath, mimeType: imageMimeType(item.referencePath) })),
         outputDirectory: `.toonflow/drama/assets/${props.projectId}/generated` },
     });
     const result = generated[0];
@@ -192,7 +230,8 @@ async function generate() {
     const url = await acquired.url;
     const dimensions = await imageDimensions(url);
     acquired.release();
-    const image: GeneratedImage = { path: result.path, mimeType: result.mimeType, prompt: props.prompt, aspectRatio: props.aspectRatio, referenceAssetIds: selectedReferenceIds.value.slice(), ...(dimensions ?? {}) };
+    const image: GeneratedImage = { path: result.path, mimeType: result.mimeType, prompt: props.prompt, aspectRatio: props.aspectRatio, modelId: status.value.model,
+      referenceAssetIds: uniqueSelected.filter(item => item.kind !== "legacy").map(item => item.referenceId ?? item.id), ...(dimensions ?? {}) };
     generatedImage.value = image;
     await setPreview(result.path, `${props.aspectRatio} · ${dimensions ? `${dimensions.width} × ${dimensions.height}` : "生成预览"}`);
     emit("generated", image);
@@ -209,6 +248,10 @@ async function generate() {
 .gptImageAuth, .gptImageActions, .gptImageUpload { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .gptImageAuth { justify-content: space-between; font-size: 13px; }
 .gptImageOptions { display: grid; gap: 8px; }
+.selectedReferences { display: grid; gap: 6px; }
+.selectedReference { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--el-border-color-lighter); border-radius: 5px; }
+.referenceText { display: grid; flex: 1; min-width: 0; strong, small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } small { color: var(--el-text-color-secondary); } }
+.generationConfirm { display: grid; gap: 6px; padding: 10px; border-radius: 6px; background: var(--el-fill-color-light); font-size: 12px; > div { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 8px; } span { color: var(--el-text-color-secondary); } b { min-width: 0; font-weight: 500; overflow-wrap: anywhere; } .confirmedPrompt { grid-template-columns: 1fr; } p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; } }
 .gptImageUpload > span, .gptImageActions > span { color: var(--el-text-color-secondary); font-size: 12px; }
 .gptImagePreview { display: grid; justify-items: start; gap: 8px; img { display: block; max-width: 100%; max-height: 320px; object-fit: contain; border-radius: 4px; } > div { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--el-text-color-secondary); font-size: 12px; } }
 </style>

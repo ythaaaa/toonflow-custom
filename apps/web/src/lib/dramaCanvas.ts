@@ -16,7 +16,7 @@ export type DramaCanvasBinding = {
   order?: number;
 };
 export type DramaCanvasRelation = {
-  kind: "scriptScene" | "scriptCharacter" | "sceneShot" | "characterShot" | "shotImageGenerator" | "generatorImageAsset";
+  kind: "scriptScene" | "scriptCharacter" | "sceneShot" | "characterShot" | "shotImageGenerator" | "generatorImageAsset" | "imageAssetImageGenerator";
   projectId: string;
   episodeId: string;
   scriptVersionId?: string;
@@ -53,9 +53,13 @@ export const dramaNodeHandles: Record<DramaCanvasRole, NodeHandle[]> = {
   ],
   gptImage: [
     { id: "shot", type: "target", dataType: "DRAMA_SHOT", label: "镜头" },
+    { id: "reference", type: "target", dataType: "DRAMA_IMAGE", label: "参考图片" },
     { id: "image", type: "source", dataType: "DRAMA_IMAGE", label: "生成图片" },
   ],
-  imageAsset: [{ id: "image", type: "target", dataType: "DRAMA_IMAGE", label: "生图结果" }],
+  imageAsset: [
+    { id: "image", type: "target", dataType: "DRAMA_IMAGE", label: "生图结果" },
+    { id: "reference", type: "source", dataType: "DRAMA_IMAGE", label: "参考图片" },
+  ],
 };
 
 export function readDramaCanvasBinding(value: unknown): DramaCanvasBinding | undefined {
@@ -90,7 +94,7 @@ export function dramaCanvasEdgeId(source: string, sourceHandle: string, target: 
 }
 
 export function isDramaCanvasRelationKind(value: unknown): value is DramaCanvasRelation["kind"] {
-  return ["scriptScene", "scriptCharacter", "sceneShot", "characterShot", "shotImageGenerator", "generatorImageAsset"].includes(String(value));
+  return ["scriptScene", "scriptCharacter", "sceneShot", "characterShot", "shotImageGenerator", "generatorImageAsset", "imageAssetImageGenerator"].includes(String(value));
 }
 
 export function resolveDramaCanvasRelation(sourceNode: Pick<GraphNode, "data">, targetNode: Pick<GraphNode, "data">): DramaCanvasRelation | undefined {
@@ -103,4 +107,5 @@ export function resolveDramaCanvasRelation(sourceNode: Pick<GraphNode, "data">, 
   if (source.role === "character" && target.role === "shot") return { kind: "characterShot", projectId: source.projectId, episodeId: source.episodeId, characterId: source.characterId, shotId: target.shotId };
   if (source.role === "shot" && target.role === "gptImage" && source.shotId === target.shotId) return { kind: "shotImageGenerator", projectId: source.projectId, episodeId: source.episodeId, shotId: source.shotId };
   if (source.role === "gptImage" && target.role === "imageAsset") return { kind: "generatorImageAsset", projectId: source.projectId, episodeId: source.episodeId, shotId: source.shotId, assetId: target.assetId };
+  if (source.role === "imageAsset" && target.role === "gptImage") return { kind: "imageAssetImageGenerator", projectId: source.projectId, episodeId: source.episodeId, shotId: target.shotId, assetId: source.assetId };
 }

@@ -17,8 +17,8 @@
     </div>
     <img v-if="previewUrl" class="nodeImage" :src="previewUrl" :alt="entity.title" />
     <p v-if="entity.description">{{ entity.description }}</p>
-    <el-button v-if="binding && binding.role !== 'imageAsset'" class="openEditorButton nodrag nopan" size="small" text type="primary" @click.stop="selectNode">
-      {{ binding.role === "script" ? "编辑剧本工作稿" : binding.role === "character" ? "编辑人物" : binding.role === "scene" ? "编辑场景" : binding.role === "gptImage" ? "打开 GPT 生图" : "查看镜头与生图" }}
+    <el-button v-if="binding" class="openEditorButton nodrag nopan" size="small" text type="primary" @click.stop="selectNode">
+      {{ binding.role === "script" ? "编辑剧本工作稿" : binding.role === "character" ? "编辑人物" : binding.role === "scene" ? "编辑场景" : binding.role === "gptImage" ? "打开 GPT 生图" : binding.role === "imageAsset" ? "查看图片素材" : "查看镜头与生图" }}
     </el-button>
   </article>
 </template>

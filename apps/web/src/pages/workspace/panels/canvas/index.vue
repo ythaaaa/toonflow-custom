@@ -118,6 +118,7 @@
       :binding="selectedDramaBinding"
       :state="dramaCanvasState"
       :connectedReferenceIds="connectedReferenceIds"
+      :mutateProject="mutateDramaProject"
       @saved="refreshDramaCanvasState"
       @assetSaved="addDramaImageAsset" />
     <dramaCanvasEntityPanel
@@ -125,6 +126,7 @@
       :key="dramaCanvasBindingKey(selectedDramaEntityBinding)"
       :binding="selectedDramaEntityBinding"
       :state="dramaCanvasState"
+      :mutateProject="mutateDramaProject"
       @closed="closeDramaEntityPanel"
       @saved="refreshDramaCanvasState" />
     <el-dialog v-if="currentUser?.role !== 'user'" :modelValue="!!assetSelection" class="referenceAssetDialog" title="全局素材库" width="min(1200px, 88vw)" alignCenter appendToBody destroyOnClose @update:modelValue="finishAssetSelection()">
@@ -207,6 +209,7 @@ import { useNodeToolsContext } from "@toonflow/nodes-scaffold/nodeTools";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { waitForControlValue } from "@/lib/mcpControl";
 import { archiveCharacter, archiveScene, archiveShot, createCharacter, createScene, createShot, duplicateCharacter, duplicateScene, duplicateShot, listDramaProjects, saveDramaProject, type DramaAsset, type DramaEpisode, type DramaProject } from "@/lib/dramaWorkspace";
+import type { DramaWorkspaceFiles } from "@toonflow/drama-workspace";
 import { dramaCanvasBindingKey, dramaCanvasEdgeId, dramaCanvasNodeId, dramaCanvasStateKey, dramaNodeHandles, isDramaCanvasRelationKind, readDramaCanvasBinding, resolveDramaCanvasRelation, type DramaCanvasBinding, type DramaCanvasRelation, type DramaCanvasRelationChange, type DramaCanvasState, type DramaCanvasRole } from "@/lib/dramaCanvas";
 import dramaCanvasNode from "./components/dramaCanvasNode.vue";
 import dramaCanvasShotPanel from "./components/dramaCanvasShotPanel.vue";
@@ -222,6 +225,7 @@ import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/minimap/dist/style.css";
 
 type DramaCanvasTarget = { projectId: string; episodeId: string };
+type DramaProjectMutation = (files: DramaWorkspaceFiles, project: DramaProject, manifestPath: string) => Promise<void>;
 type CanvasActivation = { canvasId: string; openDramaCanvas: (target: DramaCanvasTarget, signal?: AbortSignal) => Promise<string> };
 
 const props = withDefaults(defineProps<{
@@ -285,7 +289,7 @@ const selectedDramaBinding = computed(() => {
 const selectedDramaEntityBinding = computed(() => {
   for (const node of flow.getSelectedNodes.value.slice().reverse()) {
     const binding = readDramaCanvasBinding(node.data);
-    if (binding && (binding.role === "script" || binding.role === "character" || binding.role === "scene")) return binding;
+    if (binding && (binding.role === "script" || binding.role === "character" || binding.role === "scene" || binding.role === "imageAsset")) return binding;
   }
   return undefined;
 });
@@ -298,11 +302,20 @@ const connectedReferenceIds = computed(() => {
     const binding = readDramaCanvasBinding(node.data);
     return binding?.role === "shot" && binding.projectId === selected.projectId && binding.episodeId === selected.episodeId && binding.shotId === selected.shotId;
   });
-  if (!shotNode) return shot.referenceAssetIds ?? [];
-  const connected = flow.getEdges.value.filter(edge => edge.target === shotNode.id).flatMap(edge => {
+  const generatorNode = flow.getNodes.value.find(node => {
+    const binding = readDramaCanvasBinding(node.data);
+    return binding?.role === "gptImage" && binding.projectId === selected.projectId && binding.episodeId === selected.episodeId && binding.shotId === selected.shotId;
+  });
+  const connected = flow.getEdges.value.flatMap(edge => {
+    if (edge.target !== shotNode?.id && edge.target !== generatorNode?.id) return [];
     const source = flow.findNode(edge.source);
+    const target = flow.findNode(edge.target);
     const binding = readDramaCanvasBinding(source?.data);
-    if (!binding || !resolveDramaCanvasRelation(source!, shotNode)) return [];
+    const relation = source && target ? resolveDramaCanvasRelation(source, target) : undefined;
+    if (!binding || !relation) return [];
+    if (edge.target === generatorNode?.id) {
+      return relation?.kind === "imageAssetImageGenerator" && binding.assetId ? [binding.assetId] : [];
+    }
     if (binding.role === "character") return binding.characterId ? [binding.characterId] : [];
     if (binding.role === "scene") {
       const scene = episode?.scenes.find(item => item.id === binding.sceneId);
@@ -310,7 +323,7 @@ const connectedReferenceIds = computed(() => {
     }
     return [];
   });
-  return [...new Set([...(shot.referenceAssetIds ?? []), ...connected])];
+  return [...new Set(connected)];
 });
 const nodeDocument: NodeDocumentContext = { targets: shallowReactive(new Map()), mounts: new Map(), states: shallowReactive(new Map()) };
 const canvasDirty = ref(false);
@@ -586,10 +599,13 @@ function buildDramaCanvasSpecs(project: DramaCanvasState["project"], episode: Dr
       const characterBinding = characterBindings.get(characterId);
       if (characterBinding) edges.push({ sourceBinding: characterBinding, sourceHandle: "character", targetBinding: shotBinding.binding, targetHandle: "character" });
     }
-    project.assets.filter(asset => asset.kind === "image" && asset.shotId === shot.id).forEach((asset, assetIndex) => {
+    project.assets.filter(asset => asset.kind === "image" && asset.shotId === shot.id
+      && (!asset.projectId || asset.projectId === project.id) && (!asset.episodeId || asset.episodeId === episode.id)).forEach((asset, assetIndex) => {
       const assetBinding = dramaNodeSpec("imageAsset", project.id, episode.id, asset.name || `${shot.number} 图片素材`, { x: position.x + 310 + assetIndex * 300, y: position.y + 210 }, { assetId: asset.id, sceneId: shot.sceneId, shotId: shot.id, order });
       nodes.push(assetBinding);
-      edges.push({ sourceBinding: imageBinding.binding, sourceHandle: "image", targetBinding: assetBinding.binding, targetHandle: "image" });
+      if (asset.generatedBy === "gptImageSubscription" || !(shot.referenceAssetIds ?? []).includes(asset.id)) {
+        edges.push({ sourceBinding: imageBinding.binding, sourceHandle: "image", targetBinding: assetBinding.binding, targetHandle: "image" });
+      }
     });
   };
   scenes.forEach((scene, sceneIndex) => {
@@ -607,9 +623,18 @@ function buildDramaCanvasSpecs(project: DramaCanvasState["project"], episode: Dr
     addShot(shot, { x: 800 + index * 330, y: 220 + scenes.length * 500 }, episode.scenes.find(scene => scene.id === shot.sceneId && !scene.archived));
   }
   const shotIds = new Set(shots.map(shot => shot.id));
-  project.assets.filter(asset => asset.kind === "image" && asset.episodeId === episode.id && (!asset.shotId || !shotIds.has(asset.shotId))).forEach((asset, index) => {
+  project.assets.filter(asset => asset.kind === "image" && (!asset.projectId || asset.projectId === project.id)
+    && (!asset.episodeId || asset.episodeId === episode.id) && (!asset.shotId || !shotIds.has(asset.shotId))).forEach((asset, index) => {
     nodes.push(dramaNodeSpec("imageAsset", project.id, episode.id, asset.name || "图片素材", { x: 420 + index * 300, y: 220 + scenes.length * 500 + 250 }, { assetId: asset.id }));
   });
+  for (const shot of shots) {
+    const generatorBinding = nodes.find(item => item.binding.role === "gptImage" && item.binding.shotId === shot.id)?.binding;
+    if (!generatorBinding) continue;
+    for (const assetId of new Set(shot.referenceAssetIds ?? [])) {
+      const assetBinding = nodes.find(item => item.binding.role === "imageAsset" && item.binding.assetId === assetId)?.binding;
+      if (assetBinding) edges.push({ sourceBinding: assetBinding, sourceHandle: "reference", targetBinding: generatorBinding, targetHandle: "reference" });
+    }
+  }
   return { nodes, edges };
 }
 
@@ -786,6 +811,18 @@ function applyDramaRelation(project: DramaProject, relation: DramaCanvasRelation
         asset.sceneId = undefined;
         asset.shotId = undefined;
       }
+      return;
+    }
+    case "imageAssetImageGenerator": {
+      const asset = project.assets.find(item => item.id === relation.assetId && item.kind === "image");
+      const shot = episode.shots.find(item => item.id === relation.shotId);
+      if (!asset || !shot || !relation.assetId || !relation.shotId
+        || asset.projectId && asset.projectId !== project.id
+        || asset.episodeId && asset.episodeId !== episode.id) throw new Error("参考图片与生图节点必须属于当前项目和分集");
+      const ids = new Set(shot.referenceAssetIds ?? []);
+      if (connected) ids.add(asset.id);
+      else ids.delete(asset.id);
+      shot.referenceAssetIds = [...ids];
     }
   }
 }
@@ -818,6 +855,8 @@ function dramaRelationMatches(project: DramaProject, { relation, connected }: Dr
       return episode.shots.some(item => item.id === relation.shotId) === connected;
     case "generatorImageAsset":
       return project.assets.find(item => item.id === relation.assetId)?.shotId === (connected ? relation.shotId : undefined);
+    case "imageAssetImageGenerator":
+      return (episode.shots.find(item => item.id === relation.shotId)?.referenceAssetIds ?? []).includes(relation.assetId ?? "") === connected;
   }
 }
 
@@ -918,6 +957,28 @@ function enqueueDramaMutation<T>(action: () => Promise<T>) {
   const operation = dramaRelationQueue.then(action);
   dramaRelationQueue = operation.then(() => undefined, () => undefined);
   return operation;
+}
+
+function mutateDramaProject(mutation: DramaProjectMutation) {
+  const state = dramaCanvasState.value;
+  if (!state) return Promise.reject(new Error("当前画布没有短剧业务上下文"));
+  const expectedCanvasId = canvasId.value;
+  return enqueueDramaMutation(async () => {
+    const current = await readCurrentDramaProject(state, expectedCanvasId);
+    await mutation(current.files, current.project, current.manifestPath);
+    const saved = await current.files.readJson<DramaProject>(current.manifestPath);
+    if (saved.id !== state.project.id) throw new Error("短剧项目回读校验失败，画布未更新");
+    const episode = saved.episodes.find(item => item.id === state.episodeId);
+    if (!episode) throw new Error("短剧分集回读校验失败，画布未更新");
+    const active = dramaCanvasState.value;
+    if (active?.directory === state.directory && active.project.id === state.project.id && active.episodeId === state.episodeId && canvasId.value === expectedCanvasId) {
+      dramaProjectRevisions.set(saved, ++dramaProjectRevision);
+      dramaCanvasState.value = { ...active, manifestPath: current.manifestPath, project: saved };
+      await syncDramaCanvas(saved, episode, undefined, expectedCanvasId);
+      await flushCanvasSave();
+    }
+    return saved;
+  });
 }
 
 async function readCurrentDramaProject(state: DramaCanvasState, expectedCanvasId: string) {

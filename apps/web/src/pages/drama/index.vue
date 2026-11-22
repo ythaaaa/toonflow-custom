@@ -736,7 +736,7 @@ function openShotDetail(shot: DramaShot) {
 function makeShotPrompt(shot: DramaShot) {
   return ["短剧分镜画面，单帧构图清晰，适合后续动画制作。", sceneTitle(shot.sceneId) && `场景：${sceneTitle(shot.sceneId)}`, shot.size && `景别：${shot.size}`, shot.angle && `机位：${shot.angle}`, shot.description && `画面：${shot.description}`, shot.action && `动作：${shot.action}`, shot.expression && `表情：${shot.expression}`, project.value?.style && `画面风格：${project.value.style}`].filter(Boolean).join("\n");
 }
-type GeneratedImageResult = { path: string; mimeType: string; prompt: string; aspectRatio: string; referenceAssetIds: string[]; width?: number; height?: number };
+type GeneratedImageResult = { path: string; mimeType: string; prompt: string; aspectRatio: string; modelId: string; referenceAssetIds: string[]; width?: number; height?: number };
 type ImageAssociation = { characterId?: string; episodeId?: string; sceneId?: string; shotId?: string };
 async function persistGeneratedImage(image: GeneratedImageResult, association: ImageAssociation, label: string) {
   const targetProject = project.value;
@@ -748,7 +748,7 @@ async function persistGeneratedImage(image: GeneratedImageResult, association: I
     const targetShot = association.shotId && shotDraft.value?.id === association.shotId ? shotDraft.value : undefined;
     const previousShotAspectRatio = targetShot?.aspectRatio;
     const asset: DramaAsset = { id: crypto.randomUUID(), kind: "image", name: `${label} GPT 生图 ${new Date().toLocaleString()}`, description: image.prompt, referencePath: image.path, version: 1,
-      generatedBy: "gptImageSubscription", modelId: "gpt-image-2.6-flare", generatedAt: new Date().toISOString(), requestedAspectRatio: image.aspectRatio,
+      generatedBy: "gptImageSubscription", modelId: image.modelId, generatedAt: new Date().toISOString(), requestedAspectRatio: image.aspectRatio,
       width: image.width, height: image.height, referenceAssetIds: image.referenceAssetIds, projectId: targetProject.id, ...association };
     targetProject.assets.push(asset);
     generatedImageId.value = asset.id;
