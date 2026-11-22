@@ -2,6 +2,11 @@
   <div class="nodeErrorContent">
     <div class="errorLabel">错误详情</div>
     <div class="errorDetail" tabindex="0">{{ message }}</div>
+    <div v-if="references?.length" class="errorReferences">
+      <div class="errorLabel">本次参考图片</div>
+      <ul><li v-for="reference in references" :key="reference">{{ reference }}</li></ul>
+    </div>
+    <div v-if="safetyRejected" class="safetyHint" role="status">上游内容安全系统拒绝了这次生成请求，这不是服务器故障。系统没有改写提示词或自动重试；若你决定再次尝试，请自行更换参考图后手动发起。</div>
     <div v-if="!explanation || explaining" class="explainControls">
       <template v-if="models.length">
         <div class="errorLabel">用于解释错误的文本模型</div>
@@ -34,7 +39,7 @@ import { getNodeModelIdentity, getNodeModelKey, useNodeAi, useNodeModelSelection
 import { groupNodeModels } from "../groupNodeModels";
 import modelLabel from "./modelLabel.vue";
 
-const props = defineProps<{ message: string; context: string; signal: AbortSignal }>();
+const props = defineProps<{ message: string; context: string; references?: string[]; safetyRejected?: boolean; signal: AbortSignal }>();
 const ai = useNodeAi({ onModelsChanged: async () => { models.value = await ai.getModels(props.signal); } });
 const explaining = ref(false);
 const explanation = ref("");
@@ -115,6 +120,20 @@ async function explainError() {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
+
+    .errorReferences,
+    .safetyHint {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--el-border-color-lighter);
+      color: var(--el-text-color-secondary);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .errorReferences ul { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+
+    .safetyHint { color: var(--el-color-warning); }
 
     .explainControls {
       margin-top: 12px;

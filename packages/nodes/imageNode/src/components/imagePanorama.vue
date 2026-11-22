@@ -2,8 +2,7 @@
   <el-dropdown ref="dropdown" trigger="click" virtualTriggering :virtualRef="trigger" :disabled="disabled || busy || !src" @command="selectAction">
     <template #dropdown>
       <el-dropdown-menu>
-        <el-dropdown-item command="generateSphere">生成720°全景图</el-dropdown-item>
-        <el-dropdown-item command="generateCylinder">生成360°环绕图</el-dropdown-item>
+        <el-dropdown-item disabled>会员生图接口暂不支持全景输出</el-dropdown-item>
         <el-dropdown-item command="previewSphere" divided>预览720°全景图</el-dropdown-item>
         <el-dropdown-item command="previewCylinder">预览360°环绕图</el-dropdown-item>
       </el-dropdown-menu>
@@ -26,9 +25,10 @@
       <div class="panoramaHeader">
         <icon-panorama-horizontal :size="20" />
         <strong>{{ mode === 'sphere' ? '720°全景图' : '360°环绕图' }}</strong>
-        <span>预览与校正</span>
+        <span>本地投影预览与校正</span>
       </div>
     </template>
+    <p class="panoramaNotice">当前仅将原图投影到球面或圆柱进行本地观察。截图是单个方向视图，不是全景图文件或 AI 全景重建结果。</p>
     <div class="panoramaPanel nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @dblclick.stop @wheel.stop @keydown.stop>
       <imagePanoramaPreview v-if="visible" ref="previewStage" :src="src" :mode="mode" :disabled="disabled || saving" @capture="saveCapture" />
     </div>
@@ -39,26 +39,19 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu } from "element-plus";
 import { IconPanoramaHorizontal } from "@tabler/icons-vue";
-import { useNode } from "@vue-flow/core";
-import type { NodeMediaValue } from "@toonflow/nodes-scaffold/runtime";
-import { showNodeError } from "@toonflow/node-shared/showNodeError";
-import { buildPanoramaPrompt, type PanoramaMode } from "../imagePanorama";
+import type { PanoramaMode } from "../imagePanorama";
 import { usePanoramaCapture } from "../usePanoramaCapture";
-import { useImageVariationNode } from "../useImageVariationNode";
 import imagePanoramaPreview from "./imagePanoramaPreview.vue";
 
-const props = defineProps<{ src: string; source?: NodeMediaValue; disabled?: boolean }>();
+const props = defineProps<{ src: string; disabled?: boolean }>();
 const emit = defineEmits<{ open: [] }>();
-const { node } = useNode();
 const dropdown = ref<InstanceType<typeof ElDropdown>>();
 const trigger = ref<HTMLElement>();
 const visible = ref(false);
 const mode = ref<PanoramaMode>("sphere");
-const creating = ref(false);
-const createVariation = useImageVariationNode();
 const previewStage = ref<InstanceType<typeof imagePanoramaPreview>>();
 const { saving, saveCapture } = usePanoramaCapture(() => props.src);
-const busy = computed(() => creating.value || saving.value || !!previewStage.value?.capturing);
+const busy = computed(() => saving.value || !!previewStage.value?.capturing);
 
 defineExpose({ open, busy, visible });
 
@@ -75,25 +68,7 @@ async function selectAction(command: string) {
   if (props.disabled || busy.value || !props.src) return;
   emit("open");
   mode.value = command.endsWith("Sphere") ? "sphere" : "cylinder";
-  if (command.startsWith("preview")) {
-    visible.value = true;
-    return;
-  }
-  if (!props.source) return;
-  creating.value = true;
-  try {
-    await createVariation({
-      label: mode.value === "sphere" ? "720°全景图" : "360°环绕图",
-      prompt: buildPanoramaPrompt(mode.value),
-      model: typeof node.data.model === "string" ? node.data.model : "",
-      size: typeof node.data.size === "string" ? node.data.size : "",
-      ratio: mode.value === "sphere" ? "2:1" : "4:1",
-    });
-  } catch (error) {
-    showNodeError(error, "全景节点创建失败");
-  } finally {
-    creating.value = false;
-  }
+  visible.value = true;
 }
 
 function close(done: () => void) {
@@ -109,4 +84,5 @@ function close(done: () => void) {
   span { margin-left: 4px; color: var(--el-text-color-secondary); font-size: 12px; }
 }
 .panoramaPanel { height: min(70vh, 760px); min-height: 0; }
+.panoramaNotice { margin: 0 0 12px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
 </style>

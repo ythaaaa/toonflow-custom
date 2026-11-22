@@ -51,12 +51,23 @@
         <div class="lensControl"><span>镜头</span><div class="lensSwitch" role="group" aria-label="镜头类型"><button type="button" :aria-pressed="settings.lens === 'standard'" :disabled="busy" @click="settings.lens = 'standard'">标准</button><button type="button" :aria-pressed="settings.lens === 'wide'" :disabled="busy" @click="settings.lens = 'wide'">广角</button></div></div>
         <span class="angleSummary">相对原图 · {{ Math.round(settings.azimuth) }}° / {{ Math.round(settings.elevation) }}° · {{ getMultiAngleShot(settings.distance) }}</span>
       </div>
+      <section class="requestContext" aria-label="多角度生成内容">
+        <div class="referencePreview">
+          <img :src="src" alt="本次多角度生成使用的参考图片" />
+          <div><strong>本次参考图片</strong><span>{{ source?.url ?? '当前图片节点输出' }}</span><span>GPT Image 单图参考编辑</span></div>
+        </div>
+        <details class="promptPreview">
+          <summary>查看将提交的提示词</summary>
+          <pre>{{ requestPrompt }}</pre>
+        </details>
+        <p class="capabilityHint">此操作由提示词引导普通参考图编辑。会员接口没有专用相机控制或三维重建参数，未展示的结构由模型推测。</p>
+      </section>
       <imageVariationGenerator
         v-model:generating="generating"
         :settings="settings"
         :source="source"
         :aspectRatio="sourceRatio"
-        :prompt="buildMultiAnglePrompt(settings)"
+        :prompt="requestPrompt"
         :disabled="props.disabled"
         label="多角度"
         buttonLabel="生成新视角"
@@ -80,6 +91,7 @@ const emit = defineEmits<{ close: [] }>();
 const { node } = useNode();
 node.data.multiAngle = readMultiAngleSettings(node.data.multiAngle);
 const settings = computed(() => node.data.multiAngle as MultiAngleSettings);
+const requestPrompt = computed(() => buildMultiAnglePrompt(settings.value));
 const generating = ref(false);
 const sourceRatio = ref(0);
 const busy = computed(() => props.disabled || generating.value);
@@ -180,6 +192,32 @@ function reset() {
       }
     }
     .angleSummary { color: var(--el-text-color-secondary); font-variant-numeric: tabular-nums; }
+  }
+  .requestContext {
+    display: grid;
+    gap: 8px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--el-border-color-lighter);
+
+    .referencePreview {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+
+      img { width: 72px; height: 54px; flex: 0 0 auto; border-radius: 6px; background: var(--el-fill-color-light); object-fit: contain; }
+      div { display: grid; gap: 3px; min-width: 0; }
+      strong { font-weight: 600; }
+      span { overflow: hidden; color: var(--el-text-color-secondary); text-overflow: ellipsis; white-space: nowrap; }
+    }
+
+    .promptPreview {
+      summary { width: fit-content; color: var(--el-color-primary); cursor: pointer; }
+      pre { max-height: 160px; margin: 8px 0 0; overflow: auto; color: var(--el-text-color-secondary); font: inherit; line-height: 1.5; white-space: pre-wrap; }
+    }
+
+    .capabilityHint { margin: 0; color: var(--el-text-color-secondary); font-size: 11px; line-height: 1.5; }
   }
 }
 </style>

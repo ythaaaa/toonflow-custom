@@ -98,7 +98,7 @@
               :disabled="cancelling || deleting || uploading || (!generating && (editor?.busy || (!pendingRecovery && (!generationPrompt || !selectedModel))))"
               :title="generating ? '停止生成' : pendingRecovery ? '复查任务' : '生成图片'"
               :aria-label="generating ? '停止生成' : pendingRecovery ? '复查任务' : '生成图片'"
-              @click="generating ? generationState.cancel().catch(error => showNodeError(error, '停止生成失败')) : startGeneration().catch((error) => showNodeError(error, '图片生成失败'))" />
+              @click="generating ? generationState.cancel().catch(error => showNodeError(error, '停止生成失败')) : startGeneration().catch(showGenerationError)" />
           </div>
         </div>
       </el-card>
@@ -313,6 +313,12 @@ function loadModels() {
   return modelsRequest;
 }
 
+function showGenerationError(error: unknown, input = generationInput.value) {
+  const label = typeof data.value.label === "string" ? data.value.label : "";
+  const operation = label.includes("多角度") ? "多角度生图" : /全景|环绕/.test(label) ? "全景生图" : "图片生成";
+  showNodeError(error, `${operation}失败`, { references: input?.images?.map(image => image.path) });
+}
+
 async function confirmInpaint() {
   const inpaintEditor = editor.value;
   if (!inpaintEditor || inpaintEditor.mode !== "inpaint") throw new Error("请先进入局部重绘");
@@ -337,7 +343,7 @@ async function startGeneration() {
   if (editor.value?.busy || editor.value?.mode === "mark") throw new Error("请先完成图片标记");
   if (editor.value?.mode === "inpaint") throw new Error("请先确认局部重绘，再到子节点生成");
   if (pendingRecovery.value) {
-    generation = generationState.resume().catch(error => showNodeError(error, "图片任务复查失败"));
+    generation = generationState.resume().catch(showGenerationError);
     return { status: "generating" };
   }
   const input = generationInput.value;
@@ -362,7 +368,7 @@ async function startGeneration() {
       if (!result) throw new Error("供应商未返回图片");
       outputs.value.image = { dataType: "IMAGE", value: { url: result.path, mimeType: result.mimeType } };
     }))
-    .catch((error) => showNodeError(error, "图片生成失败"))
+    .catch(showGenerationError)
     .finally(() => {
       generationController = undefined;
     });
