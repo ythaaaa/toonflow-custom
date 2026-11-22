@@ -44,12 +44,18 @@ function safeMessage(value: unknown, auth?: AuthRecord) {
   return message.replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[redacted JWT]").replace(/Bearer\s+[^\s"']+/gi, "Bearer [redacted]").slice(0, 1600);
 }
 async function readAuth(): Promise<AuthRecord | undefined> {
+  let content: string;
   try {
-    const value = JSON.parse(await readFile(authPath, "utf8")) as Partial<AuthRecord>;
-    if (typeof value.accessToken !== "string" || typeof value.refreshToken !== "string" || typeof value.expiresAt !== "number" || typeof value.accountId !== "string") return undefined;
-    return { accessToken: value.accessToken, refreshToken: value.refreshToken, expiresAt: value.expiresAt,
-      accountId: value.accountId, email: typeof value.email === "string" ? value.email : "" };
-  } catch { return undefined; }
+    content = await readFile(authPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  const value = JSON.parse(content) as Partial<AuthRecord>;
+  if (typeof value.accessToken !== "string" || typeof value.refreshToken !== "string" || typeof value.expiresAt !== "number" || typeof value.accountId !== "string")
+    throw new Error("GPT Image 授权记录格式无效");
+  return { accessToken: value.accessToken, refreshToken: value.refreshToken, expiresAt: value.expiresAt,
+    accountId: value.accountId, email: typeof value.email === "string" ? value.email : "" };
 }
 async function writeAuth(value: AuthRecord) {
   await mkdir(directory, { recursive: true, mode: 0o700 });

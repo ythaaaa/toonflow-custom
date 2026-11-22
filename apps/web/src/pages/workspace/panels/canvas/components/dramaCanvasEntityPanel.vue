@@ -1,5 +1,5 @@
 <template>
-  <el-drawer v-model="visible" :title="panelTitle" size="520px" appendToBody>
+  <el-drawer v-model="visible" :title="panelTitle" size="520px" appendToBody @closed="emit('closed', binding)">
     <el-skeleton v-if="loading" :rows="6" animated />
     <template v-else-if="binding.role === 'script' && episode">
       <section class="scriptEditor">
@@ -82,7 +82,7 @@ type GeneratedImage = { path: string; mimeType: string; prompt: string; aspectRa
 type ReferenceOption = { id: string; label: string; referencePath: string };
 
 const props = defineProps<{ binding: DramaCanvasBinding; state: DramaCanvasState }>();
-const emit = defineEmits<{ saved: [] }>();
+const emit = defineEmits<{ saved: []; closed: [binding: DramaCanvasBinding] }>();
 const visible = ref(true);
 const loading = ref(false);
 const saving = ref(false);
@@ -165,20 +165,32 @@ watch(() => [props.binding.role, characterDraft.value?.description, characterDra
 
 async function loadPanel() {
   const request = ++loadRequest;
+  const binding = props.binding;
+  const state = props.state;
+  const episode = state.project.episodes.find(item => item.id === binding.episodeId);
+  const version = episode?.formalVersionId
+    ? state.project.scriptVersions[binding.episodeId]?.find(item => item.id === episode.formalVersionId)
+    : undefined;
   loading.value = true;
   saveError.value = "";
   characterDraft.value = undefined;
   sceneDraft.value = undefined;
   try {
-    const files = useWorkspaceFiles(props.state.directory);
-    if (props.binding.role === "script" && episode.value) {
-      scriptDraft.value = await readEpisodeScript(files, props.state.project, props.state.episodeId, props.state.manifestPath);
-      formalContent.value = formalVersion.value ? await files.readText(formalVersion.value.path) : "";
-    } else if (props.binding.role === "character" && character.value) characterDraft.value = structuredClone(character.value);
-    else if (props.binding.role === "scene" && scene.value) sceneDraft.value = structuredClone(scene.value);
+    const files = useWorkspaceFiles(state.directory);
+    if (binding.role === "script" && episode) {
+      const draft = await readEpisodeScript(files, state.project, binding.episodeId, state.manifestPath);
+      const formal = version ? await files.readText(version.path) : "";
+      if (request !== loadRequest) return;
+      scriptDraft.value = draft;
+      formalContent.value = formal;
+    } else if (binding.role === "character" && character.value) characterDraft.value = structuredClone(character.value);
+    else if (binding.role === "scene" && scene.value) sceneDraft.value = structuredClone(scene.value);
     else throw new Error("画布业务节点关联已失效");
   } catch (error) {
-    if (request === loadRequest) ElMessage.error(error instanceof Error ? error.message : "读取画布编辑内容失败");
+    if (request === loadRequest) {
+      saveError.value = error instanceof Error ? error.message : "读取画布编辑内容失败";
+      ElMessage.error(saveError.value);
+    }
   } finally {
     if (request === loadRequest) loading.value = false;
   }

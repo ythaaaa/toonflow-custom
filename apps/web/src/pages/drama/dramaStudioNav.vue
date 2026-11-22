@@ -1,7 +1,15 @@
 <template>
   <aside class="studioNav">
     <nav aria-label="短剧创作中心">
-      <button v-for="item in items" :key="item.id" type="button" :class="{ active: section === item.section }" @click="emit('navigate', item.section)">{{ item.label }}</button>
+      <button type="button" :class="{ active: section === 'episodes' }" @click="emit('navigate', 'episodes')">分集列表</button>
+      <el-dropdown class="advancedMenu" trigger="click" @command="emit('navigate', $event)">
+        <el-button text>高级管理</el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item v-for="item in items" :key="item.id" :command="item.section">{{ item.label }}</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
       <div class="navSubActions" v-if="section === 'script'">
         <button type="button" :class="{ active: scriptView === 'editor' }" @click="emit('scriptView', 'editor')">剧本编辑</button>
         <button type="button" :class="{ active: scriptView === 'review' }" @click="emit('scriptView', 'review')">历史版本与审核</button>
@@ -16,8 +24,8 @@
         <el-option v-for="season in seasons" :key="season.id" :label="season.name" :value="season.id" />
       </el-select>
       <div class="episodeHeading"><span>本季分集</span><span>{{ episodes.length }} 集</span></div>
-      <button v-for="episode in episodes" :key="episode.id" type="button" class="episodeLink" :class="{ active: currentEpisodeId === episode.id }" @click="emit('episode', episode.id)">
-        <b>EP{{ String(episode.number).padStart(3, '0') }}</b><span>{{ episode.title }}</span>
+      <button v-for="episode in episodes" :key="episode.id" type="button" class="episodeLink" :class="{ active: currentEpisodeId === episode.id }" @click="emit('enterEpisode', episode.id)">
+        <b>EP{{ String(episode.number).padStart(3, '0') }}</b><span>{{ episode.title }}</span><small>{{ episode.status }}</small>
       </button>
       <el-empty v-if="!episodes.length" description="暂无分集" :imageSize="52" />
       <el-button class="addSeason" @click="emit('addSeason')">新增季度</el-button>
@@ -48,7 +56,7 @@ const emit = defineEmits<{
   scriptView: [view: string];
   assetView: [view: string];
   season: [seasonId: string];
-  episode: [episodeId: string];
+  enterEpisode: [episodeId: string];
   addSeason: [];
 }>();
 </script>
@@ -57,10 +65,11 @@ const emit = defineEmits<{
 .studioNav { display: flex; flex-direction: column; min-height: 0; overflow: auto; border-inline-end: 1px solid var(--el-border-color-lighter); background: var(--el-bg-color); }
 nav { display: flex; flex-direction: column; gap: 2px; padding: 12px 10px; }
 button { min-height: 34px; border: 0; border-radius: 5px; padding: 7px 10px; color: var(--el-text-color-regular); background: transparent; text-align: left; cursor: pointer; &:hover { background: var(--el-fill-color-light); } &.active { color: var(--el-color-primary); background: var(--el-color-primary-light-9); font-weight: 600; } }
+.advancedMenu { display: flex; margin-top: 4px; :deep(.el-button) { justify-content: flex-start; width: 100%; min-height: 34px; padding-inline: 10px; color: var(--el-text-color-secondary); } }
 .navSubActions { display: grid; gap: 2px; padding: 2px 0 4px 12px; button { min-height: 30px; font-size: 12px; } }
 .episodePicker { display: grid; align-content: start; gap: 7px; min-height: 0; padding: 12px 10px; border-top: 1px solid var(--el-border-color-lighter); label, .episodeHeading { color: var(--el-text-color-secondary); font-size: 12px; } }
 .episodeHeading { display: flex; justify-content: space-between; margin-top: 5px; }
-.episodeLink { display: flex; align-items: center; gap: 8px; min-height: 32px; overflow: hidden; font-size: 12px; b { flex: 0 0 auto; font-size: 11px; } span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }
+.episodeLink { display: flex; align-items: center; gap: 8px; min-height: 32px; overflow: hidden; font-size: 12px; b { flex: 0 0 auto; font-size: 11px; } span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } small { flex: 0 0 auto; color: var(--el-text-color-secondary); font-size: 10px; } }
 .addSeason { width: 100%; margin-top: 4px; }
 @media (max-width: 1100px) { .studioNav { font-size: 12px; } nav { padding: 8px 6px; } }
 </style>

@@ -10,6 +10,15 @@
       :aria-hidden="activePanel !== 'canvas'"
       :active="activePanel === 'canvas'"
       :settingsVisible="settingsVisible" />
+    <div v-if="activePanel === 'canvas' && dramaCanvasContext" class="dramaCanvasContext">
+      <el-button size="small" @click="returnToEpisodeList">返回剧集列表</el-button>
+      <span class="contextBreadcrumb"><strong>{{ dramaCanvasContext.projectName }}</strong><span>/</span><span>{{ dramaCanvasContext.seasonName }}</span><span>/</span><strong>EP{{ String(dramaCanvasContext.episodeNumber).padStart(3, '0') }} · {{ dramaCanvasContext.episodeTitle }}</strong></span>
+      <div class="contextActions">
+        <el-button size="small" :disabled="dramaCanvasIndex <= 0" @click="stepDramaEpisode(-1)">上一集</el-button>
+        <el-button size="small" :disabled="dramaCanvasIndex < 0 || dramaCanvasIndex >= dramaCanvasContext.episodes.length - 1" @click="stepDramaEpisode(1)">下一集</el-button>
+        <el-button size="small" @click="openAuxiliaryTimeline">辅助时间线</el-button>
+      </div>
+    </div>
     <keep-alive :key="workspaceStore.project?.directory" :max="1">
       <documentPanel
         v-if="activePanel === 'document'"
@@ -25,7 +34,7 @@
         :fileAction="performFileAction"
         :saveNode="saveDocumentNode" />
     </keep-alive>
-    <dramaCenter v-if="activePanel === 'drama'" class="dramaPanel" @returnWorkspace="switchPanel('canvas')" @openCanvas="openDramaCanvas" />
+    <dramaCenter v-if="activePanel === 'drama'" class="dramaPanel" :initialProjectId="dramaCanvasContext?.projectId" :initialEpisodeId="dramaCanvasContext?.episodeId" :initialSection="dramaInitialSection" @returnWorkspace="switchPanel('canvas')" @openCanvas="openDramaCanvas" />
     <workspaceMenu class="workspaceMenu" @openSettings="settingsVisible = true" @openDrama="switchPanel('drama')" />
     <div class="workspaceTools">
       <el-segmented :modelValue="activePanel" class="panelSwitcher" :options="panelOptions" size="small" aria-label="切换面板" @change="switchPanel">
@@ -153,6 +162,19 @@ const documentPanel = defineAsyncComponent(() => import("./panels/document/index
 
 const activePanel = ref<"canvas" | "document" | "drama">("canvas");
 const selectedTool = ref<"move" | "hand">("move");
+type DramaCanvasNavigation = {
+  projectId: string;
+  projectName: string;
+  seasonId: string;
+  seasonName: string;
+  episodeId: string;
+  episodeNumber: number;
+  episodeTitle: string;
+  episodes: { id: string; number: number; title: string }[];
+};
+const dramaCanvasContext = shallowRef<DramaCanvasNavigation>();
+const dramaInitialSection = ref("episodes");
+const dramaCanvasIndex = computed(() => dramaCanvasContext.value?.episodes.findIndex(item => item.id === dramaCanvasContext.value?.episodeId) ?? -1);
 const sideButtonEvents = ["mousedown", "mouseup", "auxclick"] as const;
 // 鼠标侧键会直接触发原生历史导航，需在 DOM 事件阶段拦截，避免生成中的工作区被误关闭。
 function preventSideButtonNavigation(event: MouseEvent) {
@@ -320,18 +342,37 @@ async function switchPanel(value: string | number | boolean) {
   }
 }
 
-async function openDramaCanvas(target: { projectId: string; episodeId: string }) {
+async function openDramaCanvas(target: DramaCanvasNavigation) {
+  dramaInitialSection.value = "episodes";
   if (!await switchPanel("canvas")) return;
   const signal = AbortSignal.timeout(120000);
   try {
     const panel = await waitForControlValue(() => canvasPanelRef.value?.canvasListReady ? canvasPanelRef.value : undefined, signal);
-    await panel.openDramaCanvas(target, signal);
+    await panel.openDramaCanvas({ projectId: target.projectId, episodeId: target.episodeId }, signal);
+    dramaCanvasContext.value = target;
     const context = await waitForControlValue(() => panel.getCanvasContext(), signal);
     const state = await context.call({ name: "fitCanvas", args: {} }, signal);
     if (!(state as { fitted?: boolean }).fitted) ElMessage.warning("画布已打开，但当前视口暂未完成适配");
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "打开分集制作画布失败");
   }
+}
+
+function stepDramaEpisode(offset: number) {
+  const context = dramaCanvasContext.value;
+  const episode = context?.episodes[dramaCanvasIndex.value + offset];
+  if (!context || !episode) return;
+  void openDramaCanvas({ ...context, episodeId: episode.id, episodeNumber: episode.number, episodeTitle: episode.title });
+}
+
+async function returnToEpisodeList() {
+  dramaInitialSection.value = "episodes";
+  await switchPanel("drama");
+}
+
+async function openAuxiliaryTimeline() {
+  dramaInitialSection.value = "storyboard";
+  await switchPanel("drama");
 }
 
 function readDocumentNode(directory: string, canvasPath: string, nodeId: string) {
@@ -418,6 +459,30 @@ function saveDocumentNode(directory: string, canvasPath: string, nodeId: string,
     position: absolute;
     inset: 0;
     z-index: 3;
+  }
+
+  .dramaCanvasContext {
+    position: absolute;
+    top: 58px;
+    left: 15px;
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    max-width: calc(100% - 30px);
+    padding: 6px 8px;
+    border: 1px solid var(--el-border-color-light);
+    border-radius: var(--ui-radius-large);
+    background: color-mix(in srgb, var(--el-bg-color-overlay) 82%, transparent);
+    box-shadow: var(--el-box-shadow-light);
+    backdrop-filter: blur(6px);
+    pointer-events: auto;
+
+    .contextBreadcrumb, .contextActions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+    .contextBreadcrumb { color: var(--el-text-color-secondary); font-size: 12px; }
+    .contextBreadcrumb strong { color: var(--el-text-color-primary); font-weight: 600; }
+    .contextActions { margin-left: 4px; }
   }
 
   .workspaceMenu {

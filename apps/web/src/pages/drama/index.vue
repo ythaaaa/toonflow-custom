@@ -7,9 +7,15 @@
     <section v-if="loading" class="loadingState"><el-skeleton :rows="5" animated /></section>
     <section v-else-if="loadError" class="loadingState"><el-alert type="error" :title="loadError" showIcon /><el-button @click="loadProjects">重试读取</el-button></section>
     <section v-else-if="!project && !showCreateForm" class="projectList">
-      <div class="panelHeading"><div><h2>短剧项目</h2><p>{{ workspace.project?.name }} 工作区 · {{ projects.length }} 个项目</p></div><el-button type="primary" @click="showCreateForm = true">新建短剧</el-button></div>
+      <div class="panelHeading"><div><h2>短剧项目</h2><p>{{ workspace.project?.name }} 工作区</p></div><el-button type="primary" @click="showCreateForm = true">新建短剧</el-button></div>
       <el-empty v-if="!projects.length" description="当前工作区还没有短剧项目" />
-      <el-table v-else :data="projects" rowKey="id" @rowClick="openProject($event as DramaProject)"><el-table-column prop="name" label="项目名称" minWidth="220" /><el-table-column prop="genre" label="题材" minWidth="160" /><el-table-column prop="style" label="画面风格" minWidth="180" /><el-table-column label="集数" width="100"><template #default="scope">{{ scope.row.episodes.length }} / {{ scope.row.targetEpisodes }}</template></el-table-column><el-table-column prop="updatedAt" label="最近修改" minWidth="170"><template #default="scope">{{ formatDate(scope.row.updatedAt) }}</template></el-table-column><el-table-column label="操作" width="110"><template #default="scope"><el-button link type="primary" @click.stop="openProject(scope.row as DramaProject)">打开项目</el-button></template></el-table-column></el-table>
+      <div v-else class="projectCards">
+        <button v-for="entry in projectEntries" :key="entry.project.id" type="button" class="projectCard" @click="openProject(entry.project)">
+          <span class="projectCardHeading"><strong>{{ entry.project.name }}</strong><small>最近编辑 {{ formatDate(entry.project.updatedAt) }}</small></span>
+          <span class="projectCardMeta">{{ entry.project.seasons.length }} 季 · {{ entry.project.episodes.length }} 集</span>
+          <span class="projectCardAction">打开项目</span>
+        </button>
+      </div>
     </section>
     <section v-else-if="!project" class="projectSetup">
       <el-button text @click="showCreateForm = false">返回项目列表</el-button>
@@ -24,12 +30,12 @@
     <template v-else>
       <div class="workspaceTopbar"><div><strong>{{ project.name }}</strong><span>{{ currentSeason?.name ?? '未选择季度' }}<template v-if="currentEpisode"> / EP{{ String(currentEpisode.number).padStart(3, '0') }} · {{ currentEpisode.title }}</template></span></div><div class="topbarMeta"><span>{{ project.genre || '未设题材' }}</span><span>{{ project.episodes.length }} 集</span><el-tag>{{ currentEpisode?.status ?? '未选择分集' }}</el-tag></div></div>
       <div class="dramaLayout" :class="{ assistantCollapsed }">
-        <dramaStudioNav :items="sections" :seasons="project.seasons" :episodes="seasonEpisodes" :section="section" :scriptView="scriptView" :assetView="assetView" :seasonId="seasonId" :currentEpisodeId="currentEpisodeId" @navigate="navigateSection" @scriptView="scriptView = $event" @assetView="assetView = $event" @season="seasonId = $event" @episode="currentEpisodeId = $event" @addSeason="addSeason" />
+        <dramaStudioNav :items="sections" :seasons="project.seasons" :episodes="seasonEpisodes" :section="section" :scriptView="scriptView" :assetView="assetView" :seasonId="seasonId" :currentEpisodeId="currentEpisodeId" @navigate="navigateSection" @scriptView="scriptView = $event" @assetView="assetView = $event" @season="seasonId = $event" @enterEpisode="enterCanvasById" @addSeason="addSeason" />
         <section class="dramaContent">
           <div v-if="section === 'overview'" class="contentPanel">
             <div class="panelHeading"><div><h2>项目总览</h2><p>项目资料、创作进度与快速入口</p></div><el-button type="primary" @click="navigateSection('story')">故事策划</el-button></div>
             <div class="overviewGrid"><div><span>季度</span><strong>{{ project.seasons.length }}</strong><el-button link @click="navigateSection('episodes')">进入全季规划</el-button></div><div><span>分集</span><strong>{{ project.episodes.length }} / {{ project.targetEpisodes }}</strong><el-button link @click="navigateSection('episodes')">查看分集</el-button></div><div><span>有版本的剧集</span><strong>{{ project.episodes.filter(item => item.scriptVersion > 0).length }}</strong><el-button link @click="navigateSection('script')">进入分集剧本</el-button></div><div><span>场景 / 镜头</span><strong>{{ project.episodes.reduce((sum, item) => sum + item.scenes.length, 0) }} / {{ project.episodes.reduce((sum, item) => sum + item.shots.length, 0) }}</strong><el-button link @click="navigateSection('scenes')">场景管理</el-button></div><div><span>最近修改</span><strong>{{ formatDate(project.updatedAt) }}</strong><el-button link @click="navigateSection('storyboard')">分镜镜头</el-button></div></div>
-            <div class="overviewQuickLinks"><el-button @click="navigateSection('characters')">人物资产</el-button><el-button @click="navigateSection('assets')">场景道具资产</el-button><el-button @click="navigateSection('canvas')">制作画布</el-button></div>
+            <div class="overviewQuickLinks"><el-button @click="navigateSection('characters')">人物资产</el-button><el-button @click="navigateSection('assets')">场景道具资产</el-button></div>
           </div>
           <div v-else-if="section === 'story'" class="contentPanel">
             <h2>故事策划</h2><div class="overviewGrid"><div><span>题材</span><strong>{{ project.genre || '未填写' }}</strong></div><div><span>风格</span><strong>{{ project.style || '未填写' }}</strong></div><div><span>目标集数</span><strong>{{ project.targetEpisodes }}</strong></div><div><span>单集时长</span><strong>{{ project.targetDuration }} 秒</strong></div></div>
@@ -38,7 +44,19 @@
             <el-form labelPosition="top"><div class="formRow"><el-form-item label="项目名称"><el-input v-model="project.name" /></el-form-item><el-form-item label="题材"><el-input v-model="project.genre" /></el-form-item><el-form-item label="画面风格"><el-input v-model="project.style" /></el-form-item></div><div class="formRow"><el-form-item label="目标集数"><el-input-number v-model="project.targetEpisodes" :min="1" :max="500" /></el-form-item><el-form-item label="单集目标时长（秒）"><el-input-number v-model="project.targetDuration" :min="30" :max="7200" /></el-form-item></div><el-form-item label="全季故事总纲"><el-input v-model="project.storyOutline" type="textarea" :rows="5" placeholder="记录世界观、整季主线和上下集衔接原则" /></el-form-item></el-form>
           </div>
           <div v-else-if="section === 'episodes'" class="contentPanel">
-            <div class="panelHeading"><div><h2>季度与分集</h2><p>{{ currentSeason?.name ?? '请先创建季度' }}</p></div><el-button type="primary" :disabled="!currentSeason" @click="addEpisode">新增一集</el-button></div>
+            <div class="panelHeading"><div><h2>{{ currentSeason?.name ?? '选择季度' }}</h2><p>选择一集，直接进入原生创作画布</p></div><el-button type="primary" :disabled="!currentSeason" @click="addEpisode">新增一集</el-button></div>
+            <div v-if="seasonEpisodes.length" class="episodeGrid">
+              <button v-for="episode in seasonEpisodes" :key="episode.id" type="button" class="episodeCard" @click="enterCanvas(episode)">
+                <span class="episodeNumber">EP{{ String(episode.number).padStart(3, '0') }}</span>
+                <span class="episodeInfo"><strong>{{ episode.title }}</strong><small>{{ episode.scriptVersion ? `剧本 V${String(episode.scriptVersion).padStart(3, '0')}` : '尚无剧本版本' }}</small></span>
+                <el-tag class="episodeStatus" size="small">{{ episode.status }}</el-tag>
+                <span class="episodeAction">进入画布</span>
+              </button>
+            </div>
+            <el-empty v-else description="当前季度还没有分集" />
+          </div>
+          <div v-else-if="section === 'seasonPlan'" class="contentPanel">
+            <div class="panelHeading"><div><h2>全季规划</h2><p>{{ currentSeason?.name ?? '请先创建季度' }} · 可编辑集名和分集大纲</p></div><el-button type="primary" :disabled="!currentSeason" @click="addEpisode">新增一集</el-button></div>
             <el-table :data="seasonEpisodes" rowKey="id" @rowClick="selectEpisode"><el-table-column prop="number" label="序号" width="90"><template #default="scope">EP{{ String(scope.row.number).padStart(3, '0') }}</template></el-table-column><el-table-column label="集名" minWidth="170"><template #default="scope"><el-input v-model="scope.row.title" /></template></el-table-column><el-table-column label="分集大纲" minWidth="250"><template #default="scope"><el-input v-model="scope.row.outline" /></template></el-table-column><el-table-column label="状态" width="120"><template #default="scope"><el-tag>{{ scope.row.status }}</el-tag></template></el-table-column><el-table-column label="剧本版本" width="100"><template #default="scope">{{ scope.row.scriptVersion || '—' }}</template></el-table-column></el-table>
           </div>
           <div v-else-if="section === 'script' && scriptView === 'editor'" class="contentPanel">
@@ -100,7 +118,6 @@
             <div v-if="currentEpisode" class="versionCompareControls"><el-select v-model="compareLeftId" aria-label="对比版本一"><el-option v-for="item in currentVersionRows" :key="item.id" :label="versionLabel(item)" :value="item.id" /></el-select><el-select v-model="compareRightId" aria-label="对比版本二"><el-option v-for="item in currentVersionRows" :key="item.id" :label="versionLabel(item)" :value="item.id" /></el-select><el-button :disabled="!compareLeftId || !compareRightId || compareLeftId === compareRightId" @click="compareVersions">对比所选版本</el-button></div>
             <el-table :data="scriptVersionRows" rowKey="id"><el-table-column prop="episodeLabel" label="分集" minWidth="180" /><el-table-column prop="version" label="版本" width="90"><template #default="scope">V{{ String(scope.row.version).padStart(3, "0") }}</template></el-table-column><el-table-column prop="createdAt" label="保存时间" width="190"><template #default="scope">{{ formatDate(scope.row.createdAt) }}</template></el-table-column><el-table-column prop="status" label="审核状态" width="130" /><el-table-column label="正式版" width="90"><template #default="scope">{{ isFormalVersion(scope.row.episodeId, scope.row.id) ? "正式版" : "—" }}</template></el-table-column><el-table-column label="操作" width="310" fixed="right"><template #default="scope"><el-button link @click="loadVersion(scope.row as DramaScriptVersion & { episodeId: string })">读取</el-button><el-button link @click="restoreVersion(scope.row as DramaScriptVersion & { episodeId: string })">恢复为新版本</el-button><el-button link :disabled="scope.row.status === '已确认' || scope.row.status === '已归档'" @click="setVersionReview(scope.row as DramaScriptVersion & { episodeId: string }, '待审核')">提交审核</el-button><el-button link type="primary" :disabled="scope.row.status !== '待审核' && scope.row.status !== '已确认'" @click="confirmFormalVersion(scope.row as DramaScriptVersion & { episodeId: string })">确认正式</el-button></template></el-table-column></el-table>
           </div>
-          <div v-else-if="section === 'canvas'" class="contentPanel canvasEntry"><div><h2>制作画布</h2><p>{{ currentEpisode ? `为 ${episodeLabel} 打开独立原生节点画布。布局保存在工作区画布文件，场景、镜头和素材仍以短剧项目数据为准。` : "先从左侧选择一个分集。" }}</p></div><el-button type="primary" :disabled="!currentEpisode" @click="currentEpisode && emit('openCanvas', { projectId: project.id, episodeId: currentEpisode.id })">{{ currentEpisode ? `打开 ${episodeLabel} 原生画布` : "选择分集" }}</el-button></div>
         </section>
         <codexAssistantPane ref="codexConversation" v-model:selectedModel="codexModel" v-model:collapsed="assistantCollapsed" :directory="workspace.project?.directory" :context="codexContext" @assistantCompleted="receiveCodexReply" />
       </div>
@@ -159,7 +176,20 @@ import codexAssistantPane from "./codexAssistantPane.vue";
 import { createDramaProject, createSeason, listDramaProjects, readEpisodeScript, saveDramaProject, saveEpisodeDraft, saveEpisodeScriptVersion, updateScriptReview, type DramaAsset, type DramaCharacter, type DramaEpisode, type DramaProject, type DramaProductionStatus, type DramaScene, type DramaShot, type DramaStatus, type DramaScriptVersion } from "@/lib/dramaWorkspace";
 
 const router = useRouter();
-const emit = defineEmits<{ returnWorkspace: []; openCanvas: [target: { projectId: string; episodeId: string }] }>();
+const props = defineProps<{ initialProjectId?: string; initialEpisodeId?: string; initialSection?: string }>();
+const emit = defineEmits<{
+  returnWorkspace: [];
+  openCanvas: [target: {
+    projectId: string;
+    projectName: string;
+    seasonId: string;
+    seasonName: string;
+    episodeId: string;
+    episodeNumber: number;
+    episodeTitle: string;
+    episodes: { id: string; number: number; title: string }[];
+  }];
+}>();
 const workspace = useWorkspaceStore();
 const workspaceDirectory = ref(workspace.project?.directory);
 const project = ref<DramaProject>();
@@ -170,7 +200,7 @@ const loading = ref(true);
 const loadError = ref("");
 const showCreateForm = ref(false);
 const busy = ref(false);
-const section = ref("overview");
+const section = ref("episodes");
 const scriptView = ref("editor");
 const assetView = ref("scenesAssets");
 const currentEpisodeId = ref("");
@@ -223,13 +253,12 @@ const form = reactive({ name: "", genre: "", style: "", targetEpisodes: 12, targ
 const sections = [
   { id: "overview", label: "项目总览", section: "overview" },
   { id: "story", label: "故事策划", section: "story" },
-  { id: "seasons", label: "全季规划", section: "episodes" },
+  { id: "seasons", label: "全季规划", section: "seasonPlan" },
   { id: "scripts", label: "分集剧本", section: "script" },
   { id: "scenes", label: "场景管理", section: "scenes" },
   { id: "storyboard", label: "分镜镜头", section: "storyboard" },
   { id: "characters", label: "人物资产", section: "characters" },
   { id: "assets", label: "场景道具资产", section: "assets" },
-  { id: "canvas", label: "制作画布", section: "canvas" },
 ];
 const currentSeason = computed(() => project.value?.seasons.find(item => item.id === seasonId.value));
 const seasonEpisodes = computed(() => currentSeason.value?.episodes.map(id => project.value?.episodes.find(item => item.id === id)).filter((item): item is DramaEpisode => !!item) ?? []);
@@ -330,6 +359,16 @@ async function loadProjects() {
     const entries = await listDramaProjects(useWorkspaceFiles(directory));
     if (directory !== workspaceDirectory.value) return;
     projectEntries.value = entries;
+    const initialProject = entries.find(item => item.project.id === props.initialProjectId);
+    if (initialProject) {
+      openProject(initialProject.project);
+      const initialEpisode = initialProject.project.episodes.find(item => item.id === props.initialEpisodeId);
+      if (initialEpisode) {
+        seasonId.value = initialEpisode.seasonId;
+        currentEpisodeId.value = initialEpisode.id;
+      }
+      section.value = props.initialSection ?? "episodes";
+    }
   } catch (error) {
     if (directory === workspaceDirectory.value) loadError.value = error instanceof Error ? `读取短剧项目失败：${error.message}` : "读取短剧项目失败";
   } finally {
@@ -343,6 +382,7 @@ function openProject(value: DramaProject) {
   manifestPath.value = entry.path;
   seasonId.value = entry.project.seasons[0]?.id ?? "";
   currentEpisodeId.value = entry.project.seasons[0]?.episodes[0] ?? "";
+  section.value = "episodes";
   showCreateForm.value = false;
 }
 function returnToProjects() {
@@ -531,6 +571,31 @@ function addEpisode() {
   project.value.episodes.push(episode); currentSeason.value.episodes.push(episode.id); currentEpisodeId.value = episode.id; section.value = "episodes"; void save();
 }
 function selectEpisode(episode: DramaEpisode) { currentEpisodeId.value = episode.id; section.value = "script"; }
+function enterCanvasById(episodeId: string) {
+  const episode = project.value?.episodes.find(item => item.id === episodeId);
+  if (episode) enterCanvas(episode);
+}
+function enterCanvas(episode: DramaEpisode) {
+  if (!project.value) return;
+  const season = project.value.seasons.find(item => item.id === episode.seasonId);
+  if (!season) return;
+  seasonId.value = season.id;
+  currentEpisodeId.value = episode.id;
+  section.value = "episodes";
+  emit("openCanvas", {
+    projectId: project.value.id,
+    projectName: project.value.name,
+    seasonId: season.id,
+    seasonName: season.name,
+    episodeId: episode.id,
+    episodeNumber: episode.number,
+    episodeTitle: episode.title,
+    episodes: season.episodes.flatMap(id => {
+      const item = project.value?.episodes.find(candidate => candidate.id === id);
+      return item ? [{ id: item.id, number: item.number, title: item.title }] : [];
+    }),
+  });
+}
 function addScene() {
   if (!currentEpisode.value) return;
   const scenes = currentEpisode.value.scenes;
@@ -846,7 +911,7 @@ async function loadVersion(row: DramaScriptVersion & { episodeId: string }) {
   if (!directory) return;
   try {
     const content = await useWorkspaceFiles(directory).readText(row.path);
-    if (directory === workspaceDirectory.value && row.episodeId === currentEpisode.value?.id) { loadingScript.value = true; activeScriptEpisodeId.value = row.episodeId; scriptText.value = content; loadingScript.value = false; autosaveStatus.value = `${versionLabel(row)} 已载入工作区编辑器`; section.value = "script"; }
+    if (directory === workspaceDirectory.value && row.episodeId === currentEpisode.value?.id) { loadingScript.value = true; activeScriptEpisodeId.value = row.episodeId; scriptText.value = content; loadingScript.value = false; autosaveStatus.value = `${versionLabel(row)} 已载入工作区编辑器`; scriptView.value = "editor"; section.value = "script"; }
   }
   catch (error) { ElMessage.error(error instanceof Error ? error.message : "读取剧本版本失败"); }
 }
@@ -891,7 +956,12 @@ function formatDate(value: string) { return new Date(value).toLocaleString("zh-C
 .dramaHeader { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 28px; border-bottom: 1px solid var(--el-border-color-lighter); background: var(--el-bg-color); h1 { margin: 0; font-size: 20px; font-weight: 600; } p { margin: 5px 0 0; color: var(--el-text-color-secondary); font-size: 13px; } }
 .headerActions { display: flex; gap: 8px; }
 .projectSetup { width: min(720px, calc(100% - 40px)); margin: 56px auto; padding: 28px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; background: var(--el-bg-color); h2 { margin: 0 0 24px; font-size: 18px; } }
-.projectList { width: min(1280px, calc(100% - 48px)); margin: 32px auto; padding: 24px; border: 1px solid var(--el-border-color-lighter); border-radius: 7px; background: var(--el-bg-color); }
+.projectList { width: min(900px, calc(100% - 48px)); margin: 32px auto; padding: 24px; border: 1px solid var(--el-border-color-lighter); border-radius: 7px; background: var(--el-bg-color); }
+.projectCards { display: grid; gap: 10px; }
+.projectCard { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; width: 100%; padding: 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; color: var(--el-text-color-primary); background: var(--el-bg-color); text-align: left; cursor: pointer; &:hover { border-color: var(--el-color-primary-light-5); background: var(--el-fill-color-light); } }
+.projectCardHeading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; strong { font-size: 15px; } small, .projectCardMeta { color: var(--el-text-color-secondary); font-size: 12px; } }
+.projectCardMeta { color: var(--el-text-color-secondary); font-size: 12px; }
+.projectCardAction { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--el-color-primary); font-size: 13px; }
 .loadingState { width: min(900px, calc(100% - 48px)); margin: 48px auto; display: grid; gap: 18px; }
 .formRow { display: flex; gap: 16px; > * { flex: 1; } }
 .workspaceTopbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 46px; padding: 6px 16px; border-bottom: 1px solid var(--el-border-color-lighter); background: var(--el-bg-color); > div:first-child { display: flex; align-items: baseline; gap: 12px; min-width: 0; strong { color: var(--el-text-color-primary); font-size: 14px; } span { overflow: hidden; color: var(--el-text-color-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; } } }
@@ -908,6 +978,12 @@ function formatDate(value: string) { return new Date(value).toLocaleString("zh-C
 .timelineZoom { display: flex; align-items: center; gap: 7px; color: #b2bfce; font-size: 11px; white-space: nowrap; input { width: 90px; accent-color: #69aaff; } span { min-width: 34px; color: #dce9f7; text-align: right; } }
 .timelineSaveState { min-width: 86px; color: #83d4a0; font-size: 11px; white-space: nowrap; &.saving { color: #edc275; } &.failed { color: #ff8989; } }
 .overviewGrid { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; margin: 20px 0; > div { display: grid; gap: 6px; padding: 14px; border: 1px solid var(--el-border-color-lighter); border-radius: 5px; span { color: var(--el-text-color-secondary); font-size: 12px; } strong { font-size: 18px; font-weight: 600; } } }
+.episodeGrid { display: grid; gap: 8px; }
+.episodeCard { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto 88px; align-items: center; gap: 14px; width: 100%; min-height: 68px; padding: 12px 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; color: var(--el-text-color-primary); background: var(--el-bg-color); text-align: left; cursor: pointer; &:hover { border-color: var(--el-color-primary-light-5); background: var(--el-fill-color-light); } }
+.episodeNumber { color: var(--el-text-color-secondary); font-size: 12px; font-weight: 600; }
+.episodeInfo { display: grid; gap: 4px; min-width: 0; strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } small { color: var(--el-text-color-secondary); font-size: 11px; } }
+.episodeStatus { justify-self: start; }
+.episodeAction { justify-self: end; color: var(--el-color-primary); font-size: 12px; }
 .saveInline { margin-top: 14px; }
 .scriptLayout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: stretch; }
 .scriptEditor { min-width: 0; > p { margin: 8px 0; color: var(--el-text-color-secondary); font-size: 12px; } }
@@ -919,11 +995,10 @@ function formatDate(value: string) { return new Date(value).toLocaleString("zh-C
 .shotDetailForm .wideFormItem { grid-column: 1 / -1; }
 .tableSubtext { display: block; margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; }
 .tableDescription { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; white-space: normal; }
-.canvasEntry { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 100px; p { max-width: 680px; margin: 8px 0 0; color: var(--el-text-color-secondary); font-size: 13px; } }
 .capabilityNote { margin-block: 12px 18px; }
 .assetTabs { margin-block: 8px 12px; }
 @media (max-width: 1200px) { .dramaLayout { grid-template-columns: 180px minmax(0, 1fr) 280px; } .dramaLayout.assistantCollapsed { grid-template-columns: 180px minmax(0, 1fr) 44px; } .dramaContent { padding: 12px; } }
 @media (max-width: 900px) { .dramaLayout { grid-template-columns: 160px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 340px; } .dramaLayout.assistantCollapsed { grid-template-rows: minmax(0, 1fr) 48px; } .assistantPane { grid-column: 1 / -1; grid-row: 2; border-inline-start: 0; border-top: 1px solid var(--el-border-color-lighter); } .assistantPane.collapsed { width: auto; } .collapsed .assistantHeader { flex-direction: row; padding: 4px 10px; } .topbarMeta { display: none; } }
 @media (max-width: 1100px) { .timelineToolbar { align-items: flex-start; flex-direction: column; } .timelineToolbarControls { justify-content: flex-start; } }
-@media (max-width: 700px) { .dramaHeader { align-items: flex-start; flex-direction: column; padding: 12px 16px; } .headerActions { flex-wrap: wrap; } .workspaceTopbar > div:first-child { flex-direction: column; gap: 2px; } .dramaLayout { grid-template-columns: 135px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 320px; } .dramaLayout.assistantCollapsed { grid-template-rows: minmax(0, 1fr) 46px; } .dramaContent { padding: 8px; } .contentPanel { padding: 12px; } .overviewGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .compareColumns, .shotDetailForm, .entityDetailForm { grid-template-columns: minmax(0, 1fr); } .panelHeading { align-items: flex-start; flex-direction: column; } .timelineToolbar { margin: -12px -12px 12px; padding: 12px; } .timelineToolbarControls { align-items: flex-start; } .timelineSceneSelect { width: 100%; } }
+@media (max-width: 700px) { .dramaHeader { align-items: flex-start; flex-direction: column; padding: 12px 16px; } .headerActions { flex-wrap: wrap; } .workspaceTopbar > div:first-child { flex-direction: column; gap: 2px; } .dramaLayout { grid-template-columns: 135px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 320px; } .dramaLayout.assistantCollapsed { grid-template-rows: minmax(0, 1fr) 46px; } .dramaContent { padding: 8px; } .contentPanel { padding: 12px; } .overviewGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .episodeCard { grid-template-columns: 58px minmax(0, 1fr) auto; gap: 8px; padding: 10px; } .episodeAction { grid-column: 2 / -1; justify-self: start; } .compareColumns, .shotDetailForm, .entityDetailForm { grid-template-columns: minmax(0, 1fr); } .panelHeading { align-items: flex-start; flex-direction: column; } .timelineToolbar { margin: -12px -12px 12px; padding: 12px; } .timelineToolbarControls { align-items: flex-start; } .timelineSceneSelect { width: 100%; } }
 </style>

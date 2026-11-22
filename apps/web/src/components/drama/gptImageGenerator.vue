@@ -1,6 +1,6 @@
 <template>
   <div class="gptImagePanel">
-    <div class="gptImageAuth"><span>GPT 会员授权：{{ status.authenticated ? `已连接${status.email ? ` · ${status.email}` : ""}` : "未授权" }}</span><el-button v-if="!status.authenticated" size="small" :loading="authBusy" @click="authorize">独立 ChatGPT 授权</el-button><el-button v-else size="small" @click="logout">退出授权</el-button></div>
+    <div class="gptImageAuth"><span>GPT 会员授权：{{ statusState === "loading" ? "读取中…" : statusState === "error" ? "状态暂不可用" : status.authenticated ? `已连接${status.email ? ` · ${status.email}` : ""}` : "未授权" }}</span><el-button v-if="statusState === 'ready' && !status.authenticated" size="small" :loading="authBusy" @click="authorize">独立 ChatGPT 授权</el-button><el-button v-else-if="statusState === 'ready' && status.authenticated" size="small" @click="logout">退出授权</el-button></div>
     <el-input :modelValue="prompt" type="textarea" :rows="4" resize="vertical" placeholder="输入图片提示词；可以根据当前人物、场景或镜头内容自动填写后再修改。" @update:modelValue="emit('update:prompt', $event)" />
     <div class="gptImageOptions">
       <el-select :modelValue="aspectRatio" aria-label="生图画幅" @update:modelValue="emit('update:aspectRatio', $event)"><el-option label="1:1 方形" value="1:1" /><el-option label="16:9 横屏" value="16:9" /><el-option label="9:16 竖屏" value="9:16" /></el-select>
@@ -45,6 +45,7 @@ const emit = defineEmits<{
 }>();
 
 const status = ref({ authenticated: false, email: "", expiresAt: null as number | null, model: "gpt-image-2.6-flare", aspectRatios: ["1:1", "16:9", "9:16"], quality: "auto" });
+const statusState = ref<"loading" | "ready" | "error">("loading");
 const authBusy = ref(false);
 const generating = ref(false);
 const referenceUploading = ref(false);
@@ -76,8 +77,11 @@ onMounted(refreshStatus);
 onScopeDispose(() => releasePreview?.());
 
 async function refreshStatus() {
-  try { status.value = await http<typeof status.value>({ method: "GET", url: "/api/gptImage/status", timeout: 10000 }); }
-  catch { status.value = { ...status.value, authenticated: false, email: "", expiresAt: null }; }
+  statusState.value = "loading";
+  try {
+    status.value = await http<typeof status.value>({ method: "GET", url: "/api/gptImage/status", timeout: 10000 });
+    statusState.value = "ready";
+  } catch { statusState.value = "error"; }
 }
 async function authorize() {
   const popup = window.open("about:blank", "toonflow_gpt_image_auth");

@@ -121,6 +121,7 @@
       :key="dramaCanvasBindingKey(selectedDramaEntityBinding)"
       :binding="selectedDramaEntityBinding"
       :state="dramaCanvasState"
+      @closed="closeDramaEntityPanel"
       @saved="refreshDramaCanvasState" />
     <el-dialog v-if="currentUser?.role !== 'user'" :modelValue="!!assetSelection" class="referenceAssetDialog" title="全局素材库" width="min(1200px, 88vw)" alignCenter appendToBody destroyOnClose @update:modelValue="finishAssetSelection()">
       <assetLibrary :modelValue="!!assetSelection" expanded :canSelect="canSelectAsset" :selecting="assetSelecting" @select="selectAsset" />
@@ -692,6 +693,14 @@ async function addDramaImageAsset(asset: DramaAsset) {
 
 function refreshDramaCanvasState() {
   if (dramaCanvasState.value) dramaCanvasState.value = { ...dramaCanvasState.value };
+}
+
+function closeDramaEntityPanel(binding: DramaCanvasBinding) {
+  const selectedNode = flow.getSelectedNodes.value.find(node => {
+    const selectedBinding = readDramaCanvasBinding(node.data);
+    return selectedBinding && dramaCanvasBindingKey(selectedBinding) === dramaCanvasBindingKey(binding);
+  });
+  if (selectedNode) flow.removeSelectedNodes([selectedNode]);
 }
 
 function addCanvasConnection(connection: Connection) {
