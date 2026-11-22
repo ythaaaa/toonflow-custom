@@ -79,7 +79,7 @@
             <div class="timelineToolbar">
               <div class="timelineIdentity"><span>STORYBOARD · TIMELINE</span><h2>{{ project.name }}</h2><p>{{ currentSeason?.name || "未选择季度" }} · {{ episodeLabel }} · {{ shotSceneFilter === "all" ? "所有场景" : sceneTitle(shotSceneFilter) }}</p></div>
               <div class="timelineToolbarControls">
-                <el-select v-model="shotSceneFilter" aria-label="当前场景" class="timelineSceneSelect"><el-option label="所有场景" value="all" /><el-option v-for="scene in currentEpisode?.scenes ?? []" :key="scene.id" :label="scene.heading || `场景 ${scene.number}`" :value="scene.id" /></el-select>
+                <el-select v-model="shotSceneFilter" aria-label="当前场景" class="timelineSceneSelect"><el-option label="所有场景" value="all" /><el-option v-for="scene in activeScenes" :key="scene.id" :label="scene.heading || `场景 ${scene.number}`" :value="scene.id" /></el-select>
                 <label class="timelineZoom">缩放<input v-model.number="timelineZoom" type="range" min="70" max="140" step="10" aria-label="画布缩放" /><span>{{ timelineZoom }}%</span></label>
                 <span class="timelineSaveState" :class="{ saving: busy, failed: timelineSaveState === '保存失败' }">{{ busy ? "保存中…" : timelineSaveState }}</span>
                 <el-button-group><el-button :type="viewMode === 'timeline' ? 'primary' : 'default'" @click="viewMode = 'timeline'">时间线视图</el-button><el-button :type="viewMode === 'table' ? 'primary' : 'default'" @click="viewMode = 'table'">表格视图</el-button></el-button-group>
@@ -89,7 +89,7 @@
               </div>
             </div>
             <div v-if="viewMode === 'table'" class="batchBar"><el-select v-model="batchProductionStatus" aria-label="批量制作状态"><el-option v-for="item in productionStatuses" :key="item" :label="item" :value="item" /></el-select><el-button :disabled="!selectedShots.length" @click="applyBatchProductionStatus">更新所选制作状态</el-button><el-select v-model="batchReviewStatus" aria-label="批量审核状态"><el-option v-for="item in reviewStatuses" :key="item" :label="item" :value="item" /></el-select><el-button :disabled="!selectedShots.length" @click="applyBatchReviewStatus">更新所选审核状态</el-button></div>
-            <dramaTimeline v-if="currentEpisode && viewMode === 'timeline'" :scenes="currentEpisode.scenes" :shots="currentEpisode.shots" :assets="imageAssets" :directory="workspaceDirectory || ''" :sceneFilter="shotSceneFilter" :selectedShotId="selectedShotId" :zoom="timelineZoom" @openShot="openShotDetail" @generateShot="openShotDetail" @copyShot="copyShot" @deleteShot="deleteTimelineShot" @addShot="addShot" @moveShot="moveTimelineShot" />
+            <dramaTimeline v-if="currentEpisode && viewMode === 'timeline'" :scenes="activeScenes" :shots="currentEpisode.shots.filter(item => !item.archived)" :assets="imageAssets" :directory="workspaceDirectory || ''" :sceneFilter="shotSceneFilter" :selectedShotId="selectedShotId" :zoom="timelineZoom" @openShot="openShotDetail" @generateShot="openShotDetail" @copyShot="copyShot" @deleteShot="deleteTimelineShot" @addShot="addShot" @moveShot="moveTimelineShot" />
             <el-table v-if="currentEpisode && viewMode === 'table'" :data="filteredShots" rowKey="id" @selectionChange="selectedShots = $event as DramaShot[]" @rowClick="selectShot($event as DramaShot)">
               <el-table-column type="selection" width="48" /><el-table-column prop="number" label="镜号" width="95" />
               <el-table-column label="场景" width="160"><template #default="scope"><el-select v-model="scope.row.sceneId" aria-label="镜头场景"><el-option v-for="scene in activeScenes" :key="scene.id" :label="scene.heading || `场景 ${scene.number}`" :value="scene.id" /></el-select></template></el-table-column>
@@ -268,7 +268,7 @@ const currentVersionRows = computed(() => (project.value?.scriptVersions[current
 const activeScenes = computed(() => currentEpisode.value?.scenes.filter(item => !item.archived).slice().sort((a, b) => (a.order ?? a.number) - (b.order ?? b.number)) ?? []);
 const archivedScenes = computed(() => currentEpisode.value?.scenes.filter(item => item.archived) ?? []);
 const visibleScenes = computed(() => showArchivedScenes.value ? currentEpisode.value?.scenes.slice().sort((a, b) => (a.order ?? a.number) - (b.order ?? b.number)) ?? [] : activeScenes.value);
-const filteredShots = computed(() => currentEpisode.value?.shots.filter(item => shotSceneFilter.value === "all" || item.sceneId === shotSceneFilter.value).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) ?? []);
+const filteredShots = computed(() => currentEpisode.value?.shots.filter(item => !item.archived && (shotSceneFilter.value === "all" || item.sceneId === shotSceneFilter.value)).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) ?? []);
 const currentVersion = computed(() => currentVersionRows.value.at(-1));
 const formalVersion = computed(() => currentVersionRows.value.find(item => item.id === currentEpisode.value?.formalVersionId));
 const latestVersionLabel = computed(() => currentVersion.value ? `V${String(currentVersion.value.version).padStart(3, "0")} · ${currentVersion.value.status}` : "尚无正式版本");

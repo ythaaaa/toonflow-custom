@@ -33,6 +33,8 @@ import { providePluginUpload } from "@/components/settings/panels/pluginMarket/m
 import { createCanvasMention, mentionNodeOutputs, queryMentionNodes, type MentionCanvasSource } from "@toonflow/server/agent/mentionSources";
 import type { NodeDocumentState } from "@toonflow/nodes-scaffold/nodeDocument";
 import { copyCanvasFiles, findRemainingCanvas, readCanvasFiles, type DocumentNode, type DocumentNodeOptions } from "./canvasFiles";
+import { listDramaProjects } from "@/lib/dramaWorkspace";
+import { ElMessage } from "element-plus";
 
 const props = withDefaults(defineProps<{ active?: boolean; settingsVisible?: boolean }>(), { active: true, settingsVisible: false });
 const selectedTool = defineModel<"move" | "hand">("selectedTool", { default: "move" });
@@ -49,6 +51,8 @@ const workspaceStore = useWorkspaceStore();
 const pendingUpload = providePluginUpload();
 const canvases = shallowRef<{ id: string; name: string }[]>([]);
 let fileActionBusy = false;
+let restoredDramaDirectory = "";
+const lastDramaCanvasStorageKey = "toonflow.lastDramaCanvas";
 provide("canvasList", canvases);
 provide("canvasFolders", shallowRef([]));
 provide("canvasLoadedDirectories", shallowRef<string[]>([]));
@@ -226,8 +230,64 @@ async function openDramaCanvas(target: { projectId: string; episodeId: string },
   const callSignal = AbortSignal.any([lifetime.signal, AbortSignal.timeout(120000), ...(signal ? [signal] : [])]);
   const panel = await waitForControlValue(() => activeInstance.value?.canvasListReady ? activeInstance.value : undefined, callSignal);
   callSignal.throwIfAborted();
-  return panel.openDramaCanvas(target, callSignal);
+  const canvasPath = await panel.openDramaCanvas(target, callSignal);
+  saveLastDramaCanvas({ directory: workspaceStore.project?.directory ?? "", ...target, canvasId: canvasPath });
+  return canvasPath;
 }
+
+function saveLastDramaCanvas(value: { directory: string; projectId: string; episodeId: string; canvasId: string }) {
+  if (!value.directory || !value.projectId || !value.episodeId || !value.canvasId) return;
+  try {
+    const previous = JSON.parse(localStorage.getItem(lastDramaCanvasStorageKey) || "{}") as { directory?: string; projectId?: string; episodeId?: string; navigation?: unknown };
+    const navigation = previous.directory === value.directory && previous.projectId === value.projectId && previous.episodeId === value.episodeId
+      ? previous.navigation : undefined;
+    localStorage.setItem(lastDramaCanvasStorageKey, JSON.stringify({ ...value, ...(navigation ? { navigation } : {}) }));
+  }
+  catch { /* 本地存储不可用时仍可正常使用画布。 */ }
+}
+
+watch(() => [workspaceStore.project?.directory, props.active] as const, ([directory, active]) => {
+  if (!directory || !active || restoredDramaDirectory === directory) return;
+  restoredDramaDirectory = directory;
+  let stored: { directory?: string; projectId?: string; episodeId?: string; canvasId?: string };
+  try {
+    const raw = localStorage.getItem(lastDramaCanvasStorageKey);
+    if (!raw) return;
+    stored = JSON.parse(raw) as typeof stored;
+  } catch {
+    localStorage.removeItem(lastDramaCanvasStorageKey);
+    return;
+  }
+  if (stored.directory !== directory || !stored.projectId || !stored.episodeId || !stored.canvasId) return;
+  const callSignal = AbortSignal.any([lifetime.signal, AbortSignal.timeout(60000)]);
+  void (async () => {
+    try {
+      const panel = await waitForControlValue(() => activeInstance.value?.canvasListReady ? activeInstance.value : undefined, callSignal);
+      callSignal.throwIfAborted();
+      const files = useWorkspaceFiles(directory);
+      const [entries, listedCanvases] = await Promise.all([listDramaProjects(files), panel.getCanvases(callSignal)]);
+      if (workspaceStore.project?.directory !== directory) return;
+      const entry = entries.find(item => item.project.id === stored.projectId);
+      const episode = entry?.project.episodes.find(item => item.id === stored.episodeId);
+      const season = episode && entry?.project.seasons.find(item => item.id === episode.seasonId && item.episodes.includes(episode.id));
+      const expectedCanvasId = entry && episode
+        ? `dramaCanvas${entry.project.id.replaceAll("-", "")}${episode.id.replaceAll("-", "")}.json`
+        : "";
+      if (!entry || !episode || !season || stored.canvasId !== expectedCanvasId || !listedCanvases.some(item => item.id === expectedCanvasId)) {
+        localStorage.removeItem(lastDramaCanvasStorageKey);
+        return;
+      }
+      const target = { projectId: entry.project.id, episodeId: episode.id };
+      const restoredPanel = await ensureCanvas(expectedCanvasId, callSignal, true);
+      await restoredPanel.openDramaCanvas(target, callSignal);
+      saveLastDramaCanvas({ directory, ...target, canvasId: expectedCanvasId });
+    } catch (error) {
+      if (!callSignal.aborted && workspaceStore.project?.directory === directory) {
+        ElMessage.warning(error instanceof Error ? `上次短剧画布未能恢复，已保留默认画布：${error.message}` : "上次短剧画布未能恢复，已保留默认画布");
+      }
+    }
+  })();
+}, { flush: "post", immediate: true });
 
 function relativePath(path: string) {
   const parts = path.replaceAll("\\", "/").split("/").filter(part => part && part !== ".");

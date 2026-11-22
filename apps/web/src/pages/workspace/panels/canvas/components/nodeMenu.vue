@@ -69,7 +69,13 @@
         <template v-else>
           <el-dropdown-item v-if="!directNodes" command="actions" :icon="IconChevronLeft">返回操作菜单</el-dropdown-item>
           <el-dropdown-item v-else disabled>添加节点</el-dropdown-item>
-          <el-dropdown-item v-if="!menuItems.length" disabled>{{ pendingHandle || pendingGroup.length ? "没有可连接的节点" : "没有可显示的节点" }}</el-dropdown-item>
+          <template v-if="dramaContext">
+            <el-divider />
+            <el-dropdown-item command="drama:character" :disabled="!createDramaNode">添加人物</el-dropdown-item>
+            <el-dropdown-item command="drama:scene" :disabled="!createDramaNode">添加场景</el-dropdown-item>
+            <el-dropdown-item command="drama:shot" :disabled="!createDramaNode">添加分镜镜头</el-dropdown-item>
+          </template>
+          <el-dropdown-item v-if="!menuItems.length && !dramaContext" disabled>{{ pendingHandle || pendingGroup.length ? "没有可连接的节点" : "没有可显示的节点" }}</el-dropdown-item>
           <nodeMenuItems
             v-if="menuVisible"
             ref="nodeMenuItemsRef"
@@ -99,6 +105,7 @@ import { filterNodeMenu, resolveNodeMenu } from "@toonflow/server/nodeMenu";
 import { getSelectionConnections } from "../selectionConnections";
 import { getSelectionRoots, getSelectionTree } from "../selectionNodes";
 import { arrangeSelection } from "../arrangeSelection";
+import { readDramaCanvasBinding } from "@/lib/dramaCanvas";
 import {
   IconClipboard,
   IconCopyPlus,
@@ -115,7 +122,8 @@ import {
   IconLayoutGrid,
 } from "@tabler/icons-vue";
 
-const { remoteNodes = [], disabled = false, pasteNode, uploadFiles, canUndo = false, canRedo = false, selectionBusy = false, batchHistory } = defineProps<{
+const { remoteNodes = [], disabled = false, pasteNode, uploadFiles, canUndo = false, canRedo = false, selectionBusy = false, batchHistory,
+  dramaContext = false, createDramaNode, archiveDramaNode } = defineProps<{
   remoteNodes?: { type: string; label: string }[];
   disabled?: boolean;
   pasteNode?: (position: { x: number; y: number }) => Promise<boolean>;
@@ -124,6 +132,9 @@ const { remoteNodes = [], disabled = false, pasteNode, uploadFiles, canUndo = fa
   canRedo?: boolean;
   selectionBusy?: boolean;
   batchHistory?: (action: () => Promise<void>) => Promise<void>;
+  dramaContext?: boolean;
+  createDramaNode?: (kind: "character" | "scene" | "shot", position: { x: number; y: number }) => Promise<void>;
+  archiveDramaNode?: (node: GraphNode) => Promise<void>;
 }>();
 const emit = defineEmits<{ history: []; undo: []; redo: []; duplicateSelection: [] }>();
 const menu = ref<DropdownInstance>();
@@ -302,6 +313,14 @@ async function handleCommand(command: unknown) {
     uploadFiles?.({ ...nodePosition });
     return;
   }
+  if (typeof command === "string" && command.startsWith("drama:")) {
+    const kind = command.slice("drama:".length);
+    if (!dramaContext || !createDramaNode || !["character", "scene", "shot"].includes(kind)) return;
+    menu.value?.handleClose();
+    try { await createDramaNode(kind as "character" | "scene" | "shot", { ...nodePosition }); }
+    catch (error) { ElMessage.error(error instanceof Error ? error.message : "创建短剧节点失败"); }
+    return;
+  }
   if (command === "undo" || command === "redo") {
     if (command === "undo" ? !canUndo : !canRedo) return;
     menu.value?.handleClose();
@@ -409,6 +428,26 @@ async function runCommand(command: unknown) {
 
 async function deleteSelection(selection = selectedNodes.value) {
   if (selectionBusy || deleting.value) return;
+  const selectedTree = getSelectionTree(selection, flow.getNodes.value);
+  const dramaNodes = selectedTree.filter(node => readDramaCanvasBinding(node.data));
+  if (dramaNodes.length) {
+    deleting.value = true;
+    try {
+      if (selectedTree.length !== 1 || dramaNodes.length !== 1) throw new Error("请一次只归档一个短剧业务节点，并单独处理普通画布节点");
+      const node = dramaNodes[0]!;
+      const role = readDramaCanvasBinding(node.data)?.role;
+      if (role !== "character" && role !== "scene" && role !== "shot") throw new Error("剧本、生图和图片素材节点不能通过画布删除；其业务关联会继续保留");
+      if (!archiveDramaNode) throw new Error("当前短剧画布没有可用的归档操作");
+      await archiveDramaNode(node);
+      menu.value?.handleClose();
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : "归档短剧节点失败");
+    } finally {
+      selectedNodes.value = selectedNodes.value.filter(node => flow.findNode(node.id) === node);
+      deleting.value = false;
+    }
+    return;
+  }
   const nodes = getSelectionTree(selection.filter(node => node.deletable !== false), flow.getNodes.value).reverse();
   const nodeIds = new Set(nodes.filter(node => node.deletable !== false).map(node => node.id));
   deleting.value = true;

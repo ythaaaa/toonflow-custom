@@ -219,6 +219,7 @@ export function useCanvasTools(options: {
         const idSet = new Set(nodeIds);
         const nodes = nodeIds.map(findNode);
         nodes.forEach(node => {
+          if (readDramaCanvasBinding(node.data)) throw new Error("短剧业务记录不能通过画布工具物理删除；请在原生画布中确认归档");
           if (node.deletable === false) throw new Error(`节点不允许删除：${node.id}`);
           if (flow.getNodes.value.some(item => item.parentNode === node.id && !idSet.has(item.id))) {
             throw new Error(`请先删除此节点的子节点：${node.id}`);

@@ -81,10 +81,12 @@ import { useNodeEvent } from "@toonflow/nodes-scaffold/nodeEvent";
 import { finishGroupDrag, getSelectionRoots, getSelectionTree } from "../selectionNodes";
 import { arrangeSelection, type ArrangeSelectionMode } from "../arrangeSelection";
 import { remapNodeReferences } from "../canvasFiles";
+import { readDramaCanvasBinding } from "@/lib/dramaCanvas";
 
 const props = defineProps<{
   batchHistory: (action: () => Promise<void>) => Promise<void>;
   getSignal: () => AbortSignal;
+  duplicateDramaNode?: (node: GraphNode, position: XYPosition) => Promise<string>;
   disabled?: boolean;
 }>();
 const flow = useVueFlow();
@@ -155,6 +157,7 @@ function changeGroupColor(color: string | null) {
 
 async function duplicateNodes(selection: GraphNode[], signal: AbortSignal, withEdges = true, positions?: Map<string, XYPosition>) {
   const nodes = getSelectionTree(selection, flow.getNodes.value);
+  if (nodes.some(node => readDramaCanvasBinding(node.data))) throw new Error("短剧业务节点必须通过独立业务记录进行复制");
   const roots = getSelectionRoots(nodes, flow.getNodes.value);
   const rootsIds = new Set(roots.map(node => node.id));
   const bounds = getRectOfNodes(nodes);
@@ -291,6 +294,10 @@ async function selectNodes(ids: string[], signal: AbortSignal) {
 function startDragCopy(selection: GraphNode[], withEdges: boolean) {
   const nodes = getSelectionTree(selection, flow.getNodes.value);
   if (busy.value || props.disabled || !nodes.length) return;
+  if (nodes.some(node => readDramaCanvasBinding(node.data))) {
+    ElMessage.warning("短剧业务节点请使用“创建副本”，以生成独立业务记录");
+    return;
+  }
   const roots = getSelectionRoots(nodes, flow.getNodes.value);
   const startPositions = new Map(nodes.map(node => [node.id, { ...node.position }]));
   const positions = new Map(startPositions);
@@ -360,6 +367,28 @@ async function operate(command: "duplicate" | "group" | "ungroup" | "mergeGroup"
   const selection = [...flow.getSelectedNodes.value];
   if (!selection.length) return;
   const signal = props.getSignal();
+  if (command === "duplicate") {
+    const nodes = getSelectionTree(selection, flow.getNodes.value);
+    const dramaNodes = nodes.filter(node => readDramaCanvasBinding(node.data));
+    if (dramaNodes.length) {
+      busy.value = true;
+      try {
+        signal.throwIfAborted();
+        if (nodes.length !== 1 || dramaNodes.length !== 1) throw new Error("请一次只复制一个短剧业务节点");
+        const node = dramaNodes[0]!;
+        const role = readDramaCanvasBinding(node.data)?.role;
+        if (role !== "character" && role !== "scene" && role !== "shot") throw new Error("此短剧节点不能复制为新的业务记录");
+        if (!props.duplicateDramaNode) throw new Error("当前短剧画布没有可用的业务复制操作");
+        const id = await props.duplicateDramaNode(node, { x: node.computedPosition.x + 48, y: node.computedPosition.y + 48 });
+        await selectNodes([id], signal);
+      } catch (error) {
+        if (!signal.aborted) ElMessage.error(error instanceof Error ? error.message : "复制短剧节点失败");
+      } finally {
+        busy.value = false;
+      }
+      return;
+    }
+  }
   busy.value = true;
   try {
     await props.batchHistory(async () => {

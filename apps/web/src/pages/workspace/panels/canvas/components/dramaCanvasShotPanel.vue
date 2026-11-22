@@ -3,6 +3,7 @@
     <template v-if="shot && state">
       <el-form labelPosition="top" class="shotForm">
         <div class="shotMeta"><span>{{ shot.size || "未设景别" }}</span><span>{{ shot.angle || "未设机位" }}</span><span>{{ shot.duration }} 秒</span></div>
+        <el-form-item label="所属场景"><el-select v-model="draft.sceneId" class="sceneSelect"><el-option label="暂不指定场景" value="" /><el-option v-for="item in activeScenes" :key="item.id" :label="item.heading || `场景 ${item.number}`" :value="item.id" /></el-select></el-form-item>
         <el-form-item label="画面描述"><el-input v-model="draft.description" type="textarea" :rows="3" /></el-form-item>
         <el-form-item label="人物动作和表情"><el-input v-model="draft.action" type="textarea" :rows="2" /><el-input v-model="draft.expression" /></el-form-item>
         <el-form-item label="台词"><el-input v-model="draft.dialogue" type="textarea" :rows="2" /></el-form-item>
@@ -53,6 +54,7 @@ const prompt = ref("");
 const aspectRatio = ref("16:9");
 const draft = ref<DramaShot>();
 const episode = computed(() => props.state.project.episodes.find(item => item.id === props.binding.episodeId));
+const activeScenes = computed(() => episode.value?.scenes.filter(item => !item.archived) ?? []);
 const shot = computed(() => episode.value?.shots.find(item => item.id === props.binding.shotId));
 const scene = computed(() => episode.value?.scenes.find(item => item.id === shot.value?.sceneId));
 const firstFrame = computed(() => props.state.project.assets.find(item => item.id === shot.value?.firstFrameAssetId));
@@ -104,6 +106,7 @@ async function saveShot() {
   try {
     await updateShot(useWorkspaceFiles(props.state.directory), props.state.project, props.state.episodeId, shot.value.id, {
       description: draft.value.description,
+      sceneId: draft.value.sceneId,
       action: draft.value.action,
       expression: draft.value.expression,
       dialogue: draft.value.dialogue,
@@ -198,6 +201,7 @@ async function applyImage(path: string) {
 .shotForm { display: grid; gap: 4px; }
 .shotMeta, .imageTarget { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .shotMeta { color: var(--el-text-color-secondary); font-size: 12px; }
+.sceneSelect { width: 100%; }
 .imageTarget { margin-bottom: 10px; font-size: 12px; .el-select { width: 160px; } }
 .saveError { color: var(--el-color-danger); font-size: 12px; }
 </style>

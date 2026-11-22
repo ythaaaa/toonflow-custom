@@ -150,6 +150,8 @@ import { QRCode } from "tdesign-vue-next";
 import settings from "@/components/settings/index.vue";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { registerWorkspaceControl, waitForControlValue } from "@/lib/mcpControl";
+import useWorkspaceFiles from "@/lib/workspaceFiles";
+import { listDramaProjects } from "@/lib/dramaWorkspace";
 import anonymousData from "@/lib/anonymousData";
 import { useProviderBalances } from "@/lib/providerBilling";
 import canvasPanel from "./panels/canvas/canvasHost.vue";
@@ -224,6 +226,67 @@ watch(() => canvasPanelRef.value?.canvasListReady, ready => {
   workspaceStore.projectLoading = !ready;
 }, { immediate: true });
 onScopeDispose(() => { workspaceStore.projectLoading = false; });
+let restoredDramaContextDirectory = "";
+let restoringDramaContextDirectory = "";
+watch(() => [workspaceStore.project?.directory, activePanel.value] as const, ([directory, panel]) => {
+  if (!directory || panel !== "canvas" || restoredDramaContextDirectory === directory || restoringDramaContextDirectory === directory) return;
+  restoringDramaContextDirectory = directory;
+  let stored: { directory?: string; projectId?: string; episodeId?: string; canvasId?: string; navigation?: DramaCanvasNavigation };
+  try {
+    const raw = localStorage.getItem("toonflow.lastDramaCanvas");
+    if (!raw) { restoredDramaContextDirectory = directory; restoringDramaContextDirectory = ""; return; }
+    stored = JSON.parse(raw) as typeof stored;
+  } catch { restoredDramaContextDirectory = directory; restoringDramaContextDirectory = ""; return; }
+  if (stored.directory?.replaceAll("\\", "/").replace(/\/+$/, "") !== directory.replaceAll("\\", "/").replace(/\/+$/, "")
+    || !stored.projectId || !stored.episodeId || !stored.canvasId) {
+    restoredDramaContextDirectory = directory;
+    restoringDramaContextDirectory = "";
+    return;
+  }
+  const navigation = stored.navigation;
+  if (navigation?.projectId === stored.projectId && navigation.episodeId === stored.episodeId && Array.isArray(navigation.episodes)) {
+    dramaCanvasContext.value = navigation;
+  }
+  const signal = AbortSignal.timeout(60000);
+  void (async () => {
+    const panel = await waitForControlValue(() => canvasPanelRef.value?.canvasListReady ? canvasPanelRef.value : undefined, signal);
+    const entries = await listDramaProjects(useWorkspaceFiles(directory));
+    if (workspaceStore.project?.directory !== directory || activePanel.value !== "canvas") return;
+    const entry = entries.find(item => item.project.id === stored.projectId);
+    const episode = entry?.project.episodes.find(item => item.id === stored.episodeId);
+    const season = episode && entry?.project.seasons.find(item => item.id === episode.seasonId && item.episodes.includes(episode.id));
+    const canvasId = entry && episode ? `dramaCanvas${entry.project.id.replaceAll("-", "")}${episode.id.replaceAll("-", "")}.json` : "";
+    if (!entry || !episode || !season || stored.canvasId !== canvasId) {
+      try { localStorage.removeItem("toonflow.lastDramaCanvas"); } catch {}
+      dramaCanvasContext.value = undefined;
+      restoredDramaContextDirectory = directory;
+      return;
+    }
+    await waitForControlValue(() => panel.canvasId === canvasId ? panel : undefined, signal);
+    if (workspaceStore.project?.directory !== directory || activePanel.value !== "canvas") return;
+    dramaCanvasContext.value = {
+      projectId: entry.project.id,
+      projectName: entry.project.name,
+      seasonId: season.id,
+      seasonName: season.name,
+      episodeId: episode.id,
+      episodeNumber: episode.number,
+      episodeTitle: episode.title,
+      episodes: season.episodes.flatMap(id => {
+        const item = entry.project.episodes.find(candidate => candidate.id === id);
+        return item ? [{ id: item.id, number: item.number, title: item.title }] : [];
+      }),
+    };
+    restoredDramaContextDirectory = directory;
+  })().catch(error => {
+    if (workspaceStore.project?.directory === directory && activePanel.value === "canvas") {
+      dramaCanvasContext.value = undefined;
+      ElMessage.warning(error instanceof Error ? `上次短剧导航未能恢复：${error.message}` : "上次短剧导航未能恢复");
+    }
+  }).finally(() => {
+    if (restoringDramaContextDirectory === directory) restoringDramaContextDirectory = "";
+  });
+}, { flush: "post", immediate: true });
 const documentPanelCache = shallowRef<{ directory: string; instance: InstanceType<typeof documentPanel> }>();
 const documentPanelRef = computed(() => documentPanelCache.value?.directory === workspaceStore.project?.directory ? documentPanelCache.value?.instance : undefined);
 watch(() => workspaceStore.project?.directory, () => {
@@ -350,6 +413,10 @@ async function openDramaCanvas(target: DramaCanvasNavigation) {
     const panel = await waitForControlValue(() => canvasPanelRef.value?.canvasListReady ? canvasPanelRef.value : undefined, signal);
     await panel.openDramaCanvas({ projectId: target.projectId, episodeId: target.episodeId }, signal);
     dramaCanvasContext.value = target;
+    try {
+      const current = JSON.parse(localStorage.getItem("toonflow.lastDramaCanvas") || "{}") as Record<string, unknown>;
+      localStorage.setItem("toonflow.lastDramaCanvas", JSON.stringify({ ...current, navigation: target }));
+    } catch { /* 画布恢复仍由 canvasHost 负责；导航元数据不可写时保留当前会话。 */ }
     const context = await waitForControlValue(() => panel.getCanvasContext(), signal);
     const state = await context.call({ name: "fitCanvas", args: {} }, signal);
     if (!(state as { fitted?: boolean }).fitted) ElMessage.warning("画布已打开，但当前视口暂未完成适配");

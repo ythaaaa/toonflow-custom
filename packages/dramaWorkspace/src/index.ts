@@ -11,8 +11,8 @@ export type DramaWorkspaceFiles = {
 export type DramaSeason = { id: string; name: string; episodes: string[] };
 export type DramaEpisode = { id: string; seasonId: string; number: number; title: string; outline: string; scriptVersion: number; scriptPath?: string; draftPath?: string; formalVersionId?: string; characterIds?: string[]; status: DramaStatus; scenes: DramaScene[]; shots: DramaShot[] };
 export type DramaScene = { id: string; number: number; order?: number; archived?: boolean; sourceScriptVersionId?: string; heading: string; time: string; location: string; interiorExterior?: "内景" | "外景"; dayPart?: "白天" | "夜晚" | "黄昏" | "清晨"; characters: string[]; charactersText: string; description: string; referenceAssetId?: string };
-export type DramaShot = { id: string; number: string; order?: number; sceneId: string; characterIds?: string[]; description: string; action: string; expression: string; size: string; angle: string; composition?: string; movement: string; dialogue: string; sound: string; duration: number; imagePrompt?: string; videoPrompt?: string; referencePath: string; firstFrameAssetId?: string; lastFrameAssetId?: string; referenceAssetIds?: string[]; aspectRatio?: string; productionStatus?: DramaProductionStatus; reviewStatus?: DramaStatus; status: DramaStatus };
-export type DramaCharacter = { id: string; name: string; description: string; appearance: string; referencePath: string; version: number };
+export type DramaShot = { id: string; number: string; order?: number; archived?: boolean; sceneId: string; characterIds?: string[]; description: string; action: string; expression: string; size: string; angle: string; composition?: string; movement: string; dialogue: string; sound: string; duration: number; imagePrompt?: string; videoPrompt?: string; referencePath: string; firstFrameAssetId?: string; lastFrameAssetId?: string; referenceAssetIds?: string[]; aspectRatio?: string; productionStatus?: DramaProductionStatus; reviewStatus?: DramaStatus; status: DramaStatus };
+export type DramaCharacter = { id: string; archived?: boolean; name: string; description: string; appearance: string; referencePath: string; version: number };
 export type DramaAsset = { id: string; kind: "scene" | "prop" | "image"; name: string; description: string; referencePath: string; version: number;
   generatedBy?: "gptImageSubscription"; modelId?: string; generatedAt?: string; requestedAspectRatio?: string; width?: number; height?: number;
   referenceAssetIds?: string[]; projectId?: string; episodeId?: string; sceneId?: string; shotId?: string; characterId?: string };
@@ -47,8 +47,10 @@ function normalizeDramaProject(project: DramaProject) {
     for (const version of versions) version.id ??= `legacy-${episode.id}-${version.version}`;
     if (!episode.formalVersionId) episode.formalVersionId = versions.find(item => item.status === "已确认")?.id;
     episode.scenes.forEach((scene, index) => { scene.order ??= index + 1; scene.archived ??= false; });
+    project.characters.forEach(character => { character.archived ??= false; });
     episode.shots.forEach((shot, index) => {
       shot.order ??= index + 1;
+      shot.archived ??= false;
       shot.reviewStatus ??= shot.status ?? "草稿";
       shot.productionStatus ??= "待制作";
     });
@@ -168,6 +170,42 @@ export async function saveDramaProject(files: DramaWorkspaceFiles, project: Dram
   await saveProjectSnapshot(files, project, manifestPath);
 }
 
+export async function createCharacter(files: DramaWorkspaceFiles, project: DramaProject, input: Partial<Omit<DramaCharacter, "id" | "version">>, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const character: DramaCharacter = {
+    id: crypto.randomUUID(), archived: false, name: input.name ?? "", description: input.description ?? "",
+    appearance: input.appearance ?? "", referencePath: input.referencePath ?? "", version: 1,
+  };
+  snapshot.characters.push(character);
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  Object.assign(project, snapshot);
+  return character;
+}
+
+export async function duplicateCharacter(files: DramaWorkspaceFiles, project: DramaProject, characterId: string, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const source = snapshot.characters.find(item => item.id === characterId && !item.archived);
+  if (!source) throw new Error("要复制的人物不存在或已归档");
+  const character: DramaCharacter = { ...source, id: crypto.randomUUID(), archived: false, version: 1 };
+  snapshot.characters.push(character);
+  for (const asset of snapshot.assets.filter(item => item.characterId === source.id)) {
+    snapshot.assets.push({ ...asset, id: crypto.randomUUID(), characterId: character.id });
+  }
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  Object.assign(project, snapshot);
+  return character;
+}
+
+export async function archiveCharacter(files: DramaWorkspaceFiles, project: DramaProject, characterId: string, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const character = snapshot.characters.find(item => item.id === characterId);
+  if (!character) throw new Error("目标人物不存在");
+  character.archived = true;
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  Object.assign(project, snapshot);
+  return character;
+}
+
 export async function updateScriptReview(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, versionId: string, status: DramaStatus, manifestPath = legacyManifestPath) {
   const snapshot = cloneProject(project);
   const episode = snapshot.episodes.find(item => item.id === episodeId);
@@ -276,15 +314,51 @@ export async function updateScene(files: DramaWorkspaceFiles, project: DramaProj
   return scene;
 }
 
-export async function createShot(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, input: Partial<Omit<DramaShot, "id" | "number" | "order">> & { sceneId: string }, manifestPath: string) {
+export async function duplicateScene(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, sceneId: string, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const episode = snapshot.episodes.find(item => item.id === episodeId);
+  const source = episode?.scenes.find(item => item.id === sceneId && !item.archived);
+  if (!episode || !source) throw new Error("要复制的场景不存在或已归档");
+  const scene: DramaScene = {
+    ...source,
+    id: crypto.randomUUID(),
+    number: Math.max(0, ...episode.scenes.map(item => item.number)) + 1,
+    order: Math.max(0, ...episode.scenes.map(item => item.order ?? item.number)) + 1,
+    archived: false,
+  };
+  const referenceAssets = snapshot.assets.filter(item => item.kind === "image" && !item.shotId && (item.sceneId === source.id || item.id === source.referenceAssetId));
+  const assetIds = new Map<string, string>();
+  for (const asset of referenceAssets) {
+    const id = crypto.randomUUID();
+    assetIds.set(asset.id, id);
+    snapshot.assets.push({ ...asset, id, sceneId: scene.id });
+  }
+  if (source.referenceAssetId && assetIds.has(source.referenceAssetId)) scene.referenceAssetId = assetIds.get(source.referenceAssetId);
+  episode.scenes.push(scene);
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  Object.assign(project, snapshot);
+  return scene;
+}
+
+export async function archiveScene(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, sceneId: string, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const scene = snapshot.episodes.find(item => item.id === episodeId)?.scenes.find(item => item.id === sceneId);
+  if (!scene) throw new Error("目标场景不存在或不属于指定分集");
+  scene.archived = true;
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  Object.assign(project, snapshot);
+  return scene;
+}
+
+export async function createShot(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, input: Partial<Omit<DramaShot, "id" | "number" | "order">> & { sceneId?: string }, manifestPath: string) {
   const snapshot = cloneProject(project);
   const episode = snapshot.episodes.find(item => item.id === episodeId);
   if (!episode) throw new Error("目标分集不存在");
-  if (!episode.scenes.some(item => item.id === input.sceneId && !item.archived)) throw new Error("镜头必须关联此分集内未归档的场景");
+  if (input.sceneId && !episode.scenes.some(item => item.id === input.sceneId && !item.archived)) throw new Error("镜头必须关联此分集内未归档的场景");
   const maxShotNumber = Math.max(0, ...episode.shots.map(item => Number(item.number.match(/\d+$/)?.[0] ?? 0)));
   const shot: DramaShot = {
     id: crypto.randomUUID(), number: `SH${String(maxShotNumber + 1).padStart(3, "0")}`,
-    order: Math.max(0, ...episode.shots.map(item => item.order ?? 0)) + 1, sceneId: input.sceneId,
+    order: Math.max(0, ...episode.shots.map(item => item.order ?? 0)) + 1, archived: false, sceneId: input.sceneId ?? "",
     description: input.description ?? "", action: input.action ?? "", expression: input.expression ?? "", size: input.size ?? "", angle: input.angle ?? "",
     composition: input.composition ?? "", movement: input.movement ?? "", dialogue: input.dialogue ?? "", sound: input.sound ?? "", duration: input.duration ?? 3,
     imagePrompt: input.imagePrompt ?? "", videoPrompt: input.videoPrompt ?? "", referencePath: input.referencePath ?? "",
@@ -293,6 +367,35 @@ export async function createShot(files: DramaWorkspaceFiles, project: DramaProje
   };
   validateShotAssetLinks(project, shot);
   episode.shots.push(shot);
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  Object.assign(project, snapshot);
+  return shot;
+}
+
+export async function duplicateShot(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, shotId: string, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const episode = snapshot.episodes.find(item => item.id === episodeId);
+  const source = episode?.shots.find(item => item.id === shotId && !item.archived);
+  if (!episode || !source) throw new Error("要复制的镜头不存在或已归档");
+  const sourceScene = episode.scenes.find(item => item.id === source.sceneId && !item.archived);
+  const maxShotNumber = Math.max(0, ...episode.shots.map(item => Number(item.number.match(/\d+$/)?.[0] ?? 0)));
+  const shot: DramaShot = { ...source, id: crypto.randomUUID(), number: `SH${String(maxShotNumber + 1).padStart(3, "0")}`, sceneId: sourceScene?.id ?? "", archived: false };
+  const orderedShots = episode.shots.slice().sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.number.localeCompare(right.number, "en", { numeric: true }));
+  const sourceIndex = orderedShots.findIndex(item => item.id === source.id);
+  orderedShots.splice(sourceIndex + 1, 0, shot);
+  orderedShots.forEach((item, index) => { item.order = index + 1; });
+  episode.shots = orderedShots;
+  validateShotAssetLinks(snapshot, shot);
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  Object.assign(project, snapshot);
+  return shot;
+}
+
+export async function archiveShot(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, shotId: string, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const shot = snapshot.episodes.find(item => item.id === episodeId)?.shots.find(item => item.id === shotId);
+  if (!shot) throw new Error("目标镜头不存在或不属于指定分集");
+  shot.archived = true;
   await saveProjectSnapshot(files, snapshot, manifestPath);
   Object.assign(project, snapshot);
   return shot;

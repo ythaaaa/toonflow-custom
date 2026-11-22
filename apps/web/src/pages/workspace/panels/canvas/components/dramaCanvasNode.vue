@@ -39,7 +39,15 @@ const handles = computed(() => Array.isArray(data.value.handles) ? data.value.ha
 const targetHandles = computed(() => handles.value.filter(item => item.type === "target"));
 const sourceHandles = computed(() => handles.value.filter(item => item.type === "source"));
 const selected = computed(() => props.selected);
-const roleLabel = computed(() => ({ script: "正式剧本", character: "人物", scene: "场景", shot: "镜头", gptImage: "GPT 会员生图", imageAsset: "图片素材" } satisfies Record<DramaCanvasRole, string>)[binding.value?.role ?? "script"]);
+const roleLabel = computed(() => {
+  const currentBinding = binding.value;
+  if (currentBinding?.role === "script") {
+    const currentProject = dramaCanvasState?.value?.project;
+    const version = currentProject?.scriptVersions[currentBinding.episodeId]?.find(item => item.id === currentBinding.scriptVersionId);
+    return version?.status === "已确认" ? "正式剧本" : "剧本草稿";
+  }
+  return ({ script: "剧本草稿", character: "人物", scene: "场景", shot: "镜头", gptImage: "GPT 会员生图", imageAsset: "图片素材" } satisfies Record<DramaCanvasRole, string>)[currentBinding?.role ?? "script"];
+});
 const entity = computed(() => {
   const currentBinding = binding.value;
   const currentProject = dramaCanvasState?.value?.project;
@@ -48,8 +56,8 @@ const entity = computed(() => {
     return { title: data.value.label || "短剧节点", description: "关联项目或分集当前不可用", imagePath: "" };
   }
   if (currentBinding.role === "script") {
-    const version = currentProject.scriptVersions[episode.id]?.find(item => item.id === episode.formalVersionId);
-    return { title: version ? `V${String(version.version).padStart(3, "0")} · ${episode.title}` : `${episode.title} · 尚无正式剧本`, description: version ? "正式剧本只读引用" : "画布操作不会覆盖正式剧本", imagePath: "" };
+    const version = currentProject.scriptVersions[episode.id]?.find(item => item.id === currentBinding.scriptVersionId);
+    return { title: version ? `V${String(version.version).padStart(3, "0")} · ${episode.title}` : `${episode.title} · 尚无剧本版本`, description: version?.status === "已确认" ? "正式剧本只读引用" : "画布编辑仅更新工作稿；草稿版本保持独立", imagePath: "" };
   }
   if (currentBinding.role === "character") {
     const character = currentProject.characters.find(item => item.id === currentBinding.characterId);
@@ -111,7 +119,10 @@ function handleTop(item: NodeHandle) {
 
 function selectNode() {
   const node = flow.findNode(props.id) as GraphNode | undefined;
-  if (node) flow.addSelectedNodes([node]);
+  if (node) {
+    flow.addSelectedNodes([node]);
+    flow.nodesSelectionActive.value = true;
+  }
 }
 </script>
 
