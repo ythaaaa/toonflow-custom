@@ -1,6 +1,6 @@
 <template>
   <div class="agentConversation">
-    <localCodexConversation v-if="selectedModelChoice?.providerId === 'localCodex'" v-model:selectedModel="selectedModel" :directory="directory" />
+    <localCodexConversation v-if="selectedModelChoice?.providerId === 'localCodex' && !allowCodexOAuthTest" v-model:selectedModel="selectedModel" :directory="directory" />
     <template v-else>
     <messageList
       :messages="messages"
@@ -57,6 +57,7 @@
       :contextUsage="contextUsage"
       :stats="stats"
       :contextWindow="contextWindow"
+      :allowCodexOAuthTest="allowCodexOAuthTest"
       @submit="submitMessage"
       @stop="stopMessage" />
     </template>
@@ -76,7 +77,7 @@ import { onAgentStopped, stopAgent } from "@/lib/agentControl";
 import { writeClipboardText } from "@/lib/clipboard";
 import { showNotification } from "@/lib/notification";
 import anonymousData from "@/lib/anonymousData";
-import { localCodexModelChoice, modelChoices, refreshModelChoices } from "@/stores/settings";
+import { codexOAuthTestModels, localCodexModelChoice, modelChoices, refreshCodexOAuthTestModels, refreshModelChoices } from "@/stores/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { AgentAttachment, AgentConversation, AgentMessage } from "./types";
 import type { AgentEvent, AgentQueue, AgentQueuedMessage } from "@toonflow/server/agent/types";
@@ -126,8 +127,12 @@ const selectedModel = ref(pendingMessage?.model ?? (props.initialSession?.provid
   ? JSON.stringify([props.initialSession.providerId, props.initialSession.modelId]) : props.initialModel ?? localStorage.getItem("toonflowLocalCodexModel") ?? ""));
 watch(selectedModel, value => { if (value === JSON.stringify(["localCodex", "codex"])) localStorage.setItem("toonflowLocalCodexModel", value); else localStorage.removeItem("toonflowLocalCodexModel"); });
 const reasoningEffort = ref(pendingMessage?.reasoningEffort ?? props.initialSession?.thinkingLevel ?? "");
-const selectedModelChoice = useNodeModelSelection(computed(() => [...modelChoices.value, localCodexModelChoice]), selectedModel);
+const allowCodexOAuthTest = import.meta.env.DEV;
+const selectedModelChoice = useNodeModelSelection(computed(() => [...modelChoices.value, ...codexOAuthTestModels.value, localCodexModelChoice]), selectedModel);
 const contextWindow = computed(() => contextUsage.value?.contextWindow ?? selectedModelChoice.value?.contextWindow ?? 262144);
+watch(() => props.active, active => {
+  if (active && import.meta.env.DEV) void refreshCodexOAuthTestModels().catch(() => {});
+}, { immediate: true });
 function showSteeringMessage(message: AgentQueuedMessage) {
   if (messages.value.some(item => item.role === "user" && (item.queueId === message.id || item.id === message.id))) return;
   const user = messages.value.findLast(item => item.role === "user");

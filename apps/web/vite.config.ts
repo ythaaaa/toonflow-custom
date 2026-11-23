@@ -8,7 +8,7 @@ import desktopConfig from "../../electrobun.config.ts";
 import postcssConfig from "../../postcss.config.ts";
 import { i18nPlugin } from "@toonflow/i18n/vite";
 
-const serverOrigin = `http://127.0.0.1:${process.env.TOONFLOW_SERVER_PORT || 3000}`;
+const serverOrigin = process.env.TOONFLOW_SERVER_ORIGIN ?? `http://127.0.0.1:${process.env.TOONFLOW_SERVER_PORT || 3000}`;
 
 export default defineConfig(({ command }) => ({
   css: { postcss: postcssConfig },
@@ -21,10 +21,11 @@ export default defineConfig(({ command }) => ({
       "/a2a": { target: serverOrigin, changeOrigin: false },
       "/api": {
         target: serverOrigin,
-        changeOrigin: false,
+        changeOrigin: true,
         configure(proxy) {
           proxy.on("proxyReq", (request, incoming) => {
             request.setHeader("x-toonflow-local-client", ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(incoming.socket.remoteAddress ?? "") ? "1" : "0");
+            request.setHeader("origin", serverOrigin);
           });
         },
       },

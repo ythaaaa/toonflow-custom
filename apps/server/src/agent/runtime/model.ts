@@ -1,11 +1,39 @@
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { ThinkingLevel } from "@/lib/modelReasoning";
-import { getConfiguredModel } from "@/utils/ai";
+import type { ReasoningEfforts, ThinkingLevel } from "@/lib/modelReasoning";
+import { getConfiguredModel, getModelReasoning } from "@/utils/ai";
 import { currentIdentity } from "@/utils/multiTenant/context";
 import { t } from "@/lib/i18n";
+import { codexOAuthTestProviderId, getCodexOAuthTestModel } from "@/agent/runtime/codexOAuthTest";
 
 export async function getAgentModelConfiguration(providerId: string, modelId: string, thinkingLevel?: ThinkingLevel) {
+  if (providerId === codexOAuthTestProviderId) {
+    const codex = await getCodexOAuthTestModel(modelId);
+    const nativeModel = codex.accountModel.model;
+    const reasoningEfforts: ReasoningEfforts = codex.accountModel.reasoningLevels.length ? Object.fromEntries(codex.accountModel.reasoningLevels.flatMap(level => {
+      const wire = nativeModel.thinkingLevelMap?.[level] ?? (level === "off" ? undefined : level);
+      return wire === undefined ? [] : [[level, wire]];
+    })) as Partial<Record<ThinkingLevel, string | null>> : false;
+    const modelDefinition = {
+      id: nativeModel.id, label: nativeModel.name, contextWindow: nativeModel.contextWindow,
+      maxOutputTokens: nativeModel.maxTokens,
+      reasoningEfforts: Object.keys(reasoningEfforts).length ? reasoningEfforts : false,
+    };
+    const reasoning = getModelReasoning(providerId, modelDefinition, "openai-responses");
+    const configured = {
+      provider: { id: providerId, label: "ChatGPT/Codex OAuth PoC", protocol: "openai-responses", apiUrl: codex.baseUrl, apiKey: "", headers: {} },
+      model: { ...modelDefinition, ...reasoning },
+      baseUrl: codex.baseUrl,
+      execution: undefined, route: undefined, revision: undefined,
+      publicProviderId: providerId, publicModelId: modelId, actor: currentIdentity(),
+      codexOAuthTest: true as const, runtime: codex.state.runtime, runtimeModel: codex.runtimeModel,
+    };
+    if (thinkingLevel === "off" && !configured.model.reasoningLevels.includes("off")) thinkingLevel = undefined;
+    if (thinkingLevel !== undefined && !configured.model.reasoningLevels.includes(thinkingLevel)) {
+      throw Object.assign(new Error(t`模型 ${configured.model.label} 不支持推理等级 ${thinkingLevel}`), { status: 400, code: "UNSUPPORTED_REASONING_EFFORT" });
+    }
+    return { ...configured, thinkingLevel, effectiveThinkingLevel: thinkingLevel ?? "off" };
+  }
   const configured = await getConfiguredModel(providerId, modelId);
   const actor = currentIdentity();
   if (configured.execution && !actor) throw Object.assign(new Error("请先登录 Toonflow"), { status: 401 });
@@ -25,6 +53,10 @@ export function getRuntimeModelConfiguration(runtime: ModelRuntime) {
 
 export async function createAgentModel(providerId: string, modelId: string, thinkingLevel?: ThinkingLevel) {
   const configured = await getAgentModelConfiguration(providerId, modelId, thinkingLevel);
+  if ("codexOAuthTest" in configured) {
+    runtimeConfigurations.set(configured.runtime, configured);
+    return configured;
+  }
   const { provider, model, baseUrl } = configured;
   const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null, refreshOnCreate: false });
   runtime.registerProvider(providerId, {

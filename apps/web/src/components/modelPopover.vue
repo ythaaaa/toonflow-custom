@@ -47,26 +47,54 @@
           </div>
         </el-form-item>
       </el-form>
+      <section v-if="showCodexOAuthTest" class="codexOAuthTest" aria-label="Codex OAuth 技术验证">
+        <div class="codexOAuthStatus" role="status">Codex OAuth PoC：{{ codexStatusLabel }}</div>
+        <el-button v-if="codexOAuthStatus.status !== 'connected' && codexOAuthStatus.status !== 'waiting'" size="small" :loading="codexLoginLoading" :disabled="disabled" @click="startCodexLogin">连接 ChatGPT/Codex</el-button>
+        <template v-if="codexOAuthStatus.deviceCode">
+          <a :href="codexOAuthStatus.deviceCode.verificationUri" target="_blank" rel="noopener noreferrer">打开官方设备授权页面</a>
+          <code class="codexUserCode">{{ codexOAuthStatus.deviceCode.userCode }}</code>
+          <span v-if="codexOAuthStatus.deviceCode.expiresAt" class="codexExpiry">有效至 {{ new Date(codexOAuthStatus.deviceCode.expiresAt).toLocaleTimeString() }}</span>
+        </template>
+        <div v-if="codexOAuthStatus.message" class="codexError">{{ codexOAuthStatus.message }}</div>
+        <div v-if="codexOAuthStatus.catalogError" class="codexError">模型目录：{{ codexOAuthStatus.catalogError }}</div>
+        <div v-if="codexOAuthStatus.status === 'connected'" class="codexActions">
+          <el-button size="small" :loading="codexRefreshing" @click="refreshCodexStatus(true)">刷新账号模型</el-button>
+          <el-button size="small" :disabled="disabled" @click="disconnectCodex">退出 PoC</el-button>
+        </div>
+      </section>
     </el-popover>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, useId, watch } from "vue";
+import { computed, onBeforeUnmount, ref, useId, watch } from "vue";
+import axios from "axios";
 import { IconChevronDown, IconChevronUp } from "@tabler/icons-vue";
 import { modelIcon } from "@toonflow/model-icons";
 import { useNodeModelSelection } from "@toonflow/nodes-scaffold/nodeAi";
 import modelLabel from "@toonflow/node-shared/modelLabel";
 import type { ThinkingLevel } from "@toonflow/server/modelReasoning";
-import { localCodexModelChoice, modelChoices, refreshModelChoices } from "@/stores/settings";
+import { codexOAuthTestModels, localCodexModelChoice, modelChoices, refreshCodexOAuthTestModels, refreshModelChoices, type CodexOAuthTestStatus } from "@/stores/settings";
 
 const selectedModel = defineModel<string>({ default: "" });
 const reasoningEffort = defineModel<string>("reasoningEffort", { default: "" });
-const props = withDefaults(defineProps<{ active?: boolean; disabled?: boolean; allowLocalCodex?: boolean }>(), { active: true, disabled: false, allowLocalCodex: false });
+const props = withDefaults(defineProps<{ active?: boolean; disabled?: boolean; allowLocalCodex?: boolean; allowCodexOAuthTest?: boolean }>(), { active: true, disabled: false, allowLocalCodex: false, allowCodexOAuthTest: false });
 const visible = ref(false);
 const reasoningId = useId();
 const reasoningLabels: Record<ThinkingLevel, string> = { off: "关闭", minimal: "最小", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高" };
-const choices = computed(() => props.allowLocalCodex ? [...modelChoices.value, localCodexModelChoice] : modelChoices.value);
+const showCodexOAuthTest = computed(() => import.meta.env.DEV && props.allowCodexOAuthTest);
+const choices = computed(() => [
+  ...modelChoices.value,
+  ...(showCodexOAuthTest.value ? codexOAuthTestModels.value : []),
+  ...(props.allowLocalCodex ? [localCodexModelChoice] : []),
+]);
+const codexOAuthStatus = ref<CodexOAuthTestStatus>({ status: "disconnected", models: [] });
+const codexLoginLoading = ref(false);
+const codexRefreshing = ref(false);
+const codexStatusLabel = computed(() => ({
+  disconnected: "未连接", starting: "正在发起授权", waiting: "等待账号授权", connected: "已连接", error: "授权失败",
+}[codexOAuthStatus.value.status]));
+let codexPollTimer: number | undefined;
 const selectedModelChoice = useNodeModelSelection(choices, selectedModel);
 const modelGroups = computed(() => {
   const groups = new Map<string, { id: string; label: string; models: Array<(typeof modelChoices.value)[number]> }>();
@@ -81,6 +109,46 @@ const reasoningLevels = computed(() => selectedModelChoice.value?.reasoningLevel
 const reasoningOptions = computed(() => [{ label: "默认", value: "" }, ...reasoningLevels.value.map(value => ({ label: reasoningLabels[value], value }))]);
 const reasoningColumns = computed(() => Math.min(4, reasoningOptions.value.length > 4 ? Math.ceil(reasoningOptions.value.length / 2) : reasoningOptions.value.length));
 const reasoningLabel = computed(() => reasoningOptions.value.find(item => item.value === reasoningEffort.value)?.label ?? "默认");
+function stopCodexPolling() {
+  if (codexPollTimer !== undefined) window.clearInterval(codexPollTimer);
+  codexPollTimer = undefined;
+}
+
+async function refreshCodexStatus(refresh = false) {
+  const previous = codexOAuthStatus.value.status;
+  codexRefreshing.value = refresh;
+  try {
+    codexOAuthStatus.value = await refreshCodexOAuthTestModels(refresh);
+    if (codexOAuthStatus.value.status === "connected" && codexOAuthStatus.value.models.length) {
+      stopCodexPolling();
+      await refreshModelChoices(true).catch(() => {});
+      if (previous === "waiting" || previous === "starting") ElMessage.success("Codex OAuth 已连接，账号模型目录已读取");
+    } else if (codexOAuthStatus.value.status === "error" || codexOAuthStatus.value.catalogError) stopCodexPolling();
+  } finally { codexRefreshing.value = false; }
+}
+
+async function startCodexLogin() {
+  codexLoginLoading.value = true;
+  try {
+    const { data } = await axios.post<{ code: number; data: CodexOAuthTestStatus; message?: string }>("/api/agent/codexOAuth/login", {}, { headers: { "x-toonflow-workspace": "1" } });
+    if (data.code !== 200 || !data.data) throw new Error(data.message || "启动 Codex OAuth 失败");
+    codexOAuthStatus.value = data.data;
+    stopCodexPolling();
+    codexPollTimer = window.setInterval(() => { void refreshCodexStatus().catch(error => {
+      codexOAuthStatus.value = { ...codexOAuthStatus.value, message: error instanceof Error ? error.message : "刷新授权状态失败" };
+      stopCodexPolling();
+    }); }, 2500);
+  } catch (error) {
+    codexOAuthStatus.value = { ...codexOAuthStatus.value, status: "error", message: error instanceof Error ? error.message : "启动 Codex OAuth 失败" };
+  } finally { codexLoginLoading.value = false; }
+}
+
+async function disconnectCodex() {
+  stopCodexPolling();
+  await axios.post("/api/agent/codexOAuth/logout", {}, { headers: { "x-toonflow-workspace": "1" } });
+  await refreshCodexOAuthTestModels();
+  codexOAuthStatus.value = { status: "disconnected", models: [] };
+}
 watch(choices, items => {
   if (!selectedModel.value) selectedModel.value = items[0]?.value ?? "";
 }, { immediate: true });
@@ -88,7 +156,14 @@ watch([() => selectedModelChoice.value?.reasoningLevels, reasoningEffort], ([lev
   if (levels && effort && !levels.includes(effort as ThinkingLevel)) reasoningEffort.value = "";
 }, { immediate: true, flush: "post" });
 watch(() => !props.active || props.disabled, close => { if (close) visible.value = false; });
-watch(visible, value => { if (value) void refreshModelChoices().catch(() => {}); });
+watch(visible, value => {
+  if (!value) return;
+  void refreshModelChoices().catch(() => {});
+  if (showCodexOAuthTest.value) void refreshCodexStatus().catch(error => {
+    codexOAuthStatus.value = { ...codexOAuthStatus.value, message: error instanceof Error ? error.message : "读取授权状态失败" };
+  });
+});
+onBeforeUnmount(stopCodexPolling);
 </script>
 
 <style lang="scss">
@@ -217,6 +292,34 @@ watch(visible, value => { if (value) void refreshModelChoices().catch(() => {});
         }
       }
     }
+  .codexOAuthTest {
+    display: grid;
+    gap: 8px;
+    padding-top: 14px;
+    border-top: 1px solid var(--el-border-color-lighter);
+    font-size: 12px;
+
+    .codexOAuthStatus,
+    .codexExpiry {
+      color: var(--el-text-color-secondary);
+    }
+    .codexUserCode {
+      width: fit-content;
+      padding: 4px 8px;
+      border-radius: var(--el-border-radius-base);
+      background: var(--el-fill-color-light);
+      font-size: 14px;
+      letter-spacing: .08em;
+    }
+    .codexError {
+      color: var(--el-color-danger);
+      overflow-wrap: anywhere;
+    }
+    .codexActions {
+      display: flex;
+      gap: 8px;
+    }
+  }
   }
 }
 </style>

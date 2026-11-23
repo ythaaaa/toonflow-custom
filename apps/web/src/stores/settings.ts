@@ -162,7 +162,30 @@ export async function refreshToonflowProvider() {
 type ResolvedAiModel = { providerId: string; providerLabel: string; modelId: string; routeId?: string; label: string; contextWindow: number; reasoningLevels: ThinkingLevel[] };
 const availableModels = ref<ResolvedAiModel[]>([]);
 export const modelChoices = computed(() => availableModels.value.map(model => ({ ...model, value: getNodeModelKey(model) })));
+export type CodexOAuthTestStatus = {
+  status: "disconnected" | "starting" | "waiting" | "connected" | "error";
+  deviceCode?: { verificationUri: string; userCode: string; expiresAt?: number };
+  message?: string;
+  catalogError?: string;
+  models: ResolvedAiModel[];
+};
+const availableCodexOAuthTestModels = ref<ResolvedAiModel[]>([]);
+export const codexOAuthTestModels = computed(() => availableCodexOAuthTestModels.value.map(model => ({ ...model, value: getNodeModelKey(model) })));
 export const localCodexModelChoice = { providerId: "localCodex", providerLabel: "本机 Codex Bridge", modelId: "codex", label: "本机 Codex", contextWindow: 262144, reasoningLevels: [] as ThinkingLevel[], value: JSON.stringify(["localCodex", "codex"]) };
+
+export async function refreshCodexOAuthTestModels(refresh = false) {
+  if (!import.meta.env.DEV) {
+    availableCodexOAuthTestModels.value = [];
+    return { status: "disconnected", models: [] } satisfies CodexOAuthTestStatus;
+  }
+  const { data } = await axios.get<{ code: number; data: CodexOAuthTestStatus; message?: string }>("/api/agent/codexOAuth/status", {
+    params: refresh ? { refresh: "1" } : undefined,
+    headers: { "x-toonflow-workspace": "1", "Cache-Control": "no-cache" },
+  });
+  if (data.code !== 200 || !data.data || !Array.isArray(data.data.models)) throw new Error(data.message || "读取 Codex OAuth PoC 状态失败");
+  availableCodexOAuthTestModels.value = data.data.models;
+  return data.data;
+}
 
 function applyModelReasoning(models: ResolvedAiModel[]) {
   availableModels.value = models;
