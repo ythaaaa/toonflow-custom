@@ -17,6 +17,19 @@ function isWithin(root: string, path: string) {
   return offset === "" || (offset !== ".." && !offset.startsWith(`..${sep}`) && !isAbsolute(offset));
 }
 
+function isDirectoryMissingError(error: unknown) {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+async function lstatWorkspaceDirectory(directory: string) {
+  try { return await lstat(directory); }
+  catch (error) {
+    if (isDirectoryMissingError(error)) return null;
+    throw error;
+  }
+}
+
 async function resolveManagedWorkspace(req: Request, workspaceId: string, requestedDirectory: string) {
   if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(workspaceId)) {
     throw Object.assign(new Error("工作区 ID 无效，请刷新首页后重试"), { status: 400 });
@@ -27,11 +40,19 @@ async function resolveManagedWorkspace(req: Request, workspaceId: string, reques
   if (samePath(candidate, root) || !samePath(dirname(candidate), root)) {
     throw Object.assign(new Error("只能删除服务器工作区根目录下的单个工作区，不能删除根目录或其他位置"), { status: 403 });
   }
-  const requested = await resolveWorkspace(req, candidate);
-  const info = await lstat(candidate);
+  const info = await lstatWorkspaceDirectory(candidate);
+  if (!info) return { workspaceId, directory: candidate, root, directoryExists: false as const };
   if (!info.isDirectory() || info.isSymbolicLink()) throw Object.assign(new Error("工作区必须是普通目录，不能通过符号链接删除"), { status: 403 });
+  let requested: string;
+  try { requested = await resolveWorkspace(req, candidate); }
+  catch (error) {
+    if ((error as { status?: number } | null)?.status !== 404 || await lstatWorkspaceDirectory(candidate)) throw error;
+    return { workspaceId, directory: candidate, root, directoryExists: false as const };
+  }
+  const currentInfo = await lstatWorkspaceDirectory(candidate);
+  if (!currentInfo) return { workspaceId, directory: candidate, root, directoryExists: false as const };
   if (!samePath(requested, candidate)) throw Object.assign(new Error("工作区实际路径与请求路径不一致"), { status: 403 });
-  return { workspaceId, directory: requested, root, identity: { dev: info.dev, ino: info.ino } };
+  return { workspaceId, directory: requested, root, directoryExists: true as const, identity: { dev: currentInfo.dev, ino: currentInfo.ino } };
 }
 
 async function hasNestedMount(directory: string) {
@@ -84,12 +105,28 @@ async function isWorkspaceBusy(directory: string) {
 
 export async function getWorkspaceDeletionSummary(req: Request, workspaceId: string, requestedDirectory: string) {
   const workspace = await resolveManagedWorkspace(req, workspaceId, requestedDirectory);
-  const [counts, busy] = await Promise.all([getWorkspaceContentCounts(workspace.directory), isWorkspaceBusy(workspace.directory)]);
-  return { workspaceId: workspace.workspaceId, directory: workspace.directory, name: basename(workspace.directory), counts, busy };
+  if (!workspace.directoryExists) {
+    return { workspaceId: workspace.workspaceId, directory: workspace.directory, name: basename(workspace.directory), counts: { dramas: 0, canvases: 0, assets: 0 }, busy: await isWorkspaceBusy(workspace.directory), directoryExists: false };
+  }
+  try {
+    const [counts, busy] = await Promise.all([getWorkspaceContentCounts(workspace.directory), isWorkspaceBusy(workspace.directory)]);
+    return { workspaceId: workspace.workspaceId, directory: workspace.directory, name: basename(workspace.directory), counts, busy, directoryExists: true };
+  } catch (error) {
+    if (await lstatWorkspaceDirectory(workspace.directory)) throw error;
+    return { workspaceId: workspace.workspaceId, directory: workspace.directory, name: basename(workspace.directory), counts: { dramas: 0, canvases: 0, assets: 0 }, busy: await isWorkspaceBusy(workspace.directory), directoryExists: false };
+  }
 }
 
-export async function removeManagedWorkspace(req: Request, workspaceId: string, requestedDirectory: string) {
+export async function removeManagedWorkspace(req: Request, workspaceId: string, requestedDirectory: string, expectMissing = false) {
   const workspace = await resolveManagedWorkspace(req, workspaceId, requestedDirectory);
+  if (!workspace.directoryExists) {
+    if (!expectMissing) throw Object.assign(new Error("工作区目录状态已变化，请刷新首页后重试"), { status: 409 });
+    if (await isWorkspaceBusy(workspace.directory)) {
+      throw Object.assign(new Error("工作区正在执行生成或 Agent 任务，请等待任务结束后再删除"), { status: 409, code: "EWORKSPACEBUSY" });
+    }
+    return { workspaceId: workspace.workspaceId, directoryRemoved: false };
+  }
+  if (expectMissing) throw Object.assign(new Error("工作区目录状态已变化，请刷新首页后重试"), { status: 409 });
   const releaseDeletion = lockWorkspaceDeletion(workspace.directory);
   try {
     const releaseFiles = lockWorkspaceFiles([workspace.directory]);
@@ -110,5 +147,5 @@ export async function removeManagedWorkspace(req: Request, workspaceId: string, 
       await rm(workspace.directory, { recursive: true });
     } finally { releaseFiles(); }
   } finally { releaseDeletion(); }
-  return { workspaceId: workspace.workspaceId };
+  return { workspaceId: workspace.workspaceId, directoryRemoved: true };
 }

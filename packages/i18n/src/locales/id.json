@@ -3953,5 +3953,8 @@
   "多租户媒体生成必须通过持久任务提交": "Pembuatan media multi-tenant harus dikirim melalui tugas persisten",
   "当前模式不允许切换设备连接": "Mode saat ini tidak mengizinkan pergantian koneksi perangkat",
   "多租户主机模式下不能连接其他设备": "Tidak dapat terhubung ke perangkat lain dalam mode host multi-tenant",
-  "请通过端口 10888 访问创作功能": "Gunakan port 10888 untuk mengakses fitur pembuatan"
+  "请通过端口 10888 访问创作功能": "Gunakan port 10888 untuk mengakses fitur pembuatan",
+  "此工作区目录已不存在。确认后只移除首页登记，不会删除磁盘数据。": "Direktori ruang kerja ini sudah tidak ada. Jika dikonfirmasi, hanya entri di halaman beranda yang dihapus; data di disk tidak akan dihapus.",
+  "移除失效登记": "Hapus entri usang",
+  "已移除失效工作区登记，磁盘数据未更改。": "Entri ruang kerja usang dihapus. Data di disk tidak berubah."
 }

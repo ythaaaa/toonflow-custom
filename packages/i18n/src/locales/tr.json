@@ -3953,5 +3953,8 @@
   "多租户媒体生成必须通过持久任务提交": "Çok kiracılı medya üretimi kalıcı bir görev üzerinden gönderilmelidir",
   "当前模式不允许切换设备连接": "Geçerli modda cihaz bağlantısı değiştirilemez",
   "多租户主机模式下不能连接其他设备": "Çok kiracılı ana makine modunda diğer cihazlara bağlanılamaz",
-  "请通过端口 10888 访问创作功能": "Üretim özelliklerine erişmek için 10888 bağlantı noktasını kullanın"
+  "请通过端口 10888 访问创作功能": "Üretim özelliklerine erişmek için 10888 bağlantı noktasını kullanın",
+  "此工作区目录已不存在。确认后只移除首页登记，不会删除磁盘数据。": "Bu çalışma alanı dizini artık mevcut değil. Onaylandığında yalnızca ana sayfadaki kayıt kaldırılır; diskteki veriler silinmez.",
+  "移除失效登记": "Eski kaydı kaldır",
+  "已移除失效工作区登记，磁盘数据未更改。": "Eski çalışma alanı kaydı kaldırıldı. Diskteki veriler değişmedi."
 }

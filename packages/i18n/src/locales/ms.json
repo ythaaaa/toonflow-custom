@@ -3953,5 +3953,8 @@
   "多租户媒体生成必须通过持久任务提交": "Penjanaan media berbilang penyewa mesti dihantar melalui tugas persisten",
   "当前模式不允许切换设备连接": "Mod semasa tidak membenarkan pertukaran sambungan peranti",
   "多租户主机模式下不能连接其他设备": "Tidak boleh menyambung ke peranti lain dalam mod hos berbilang penyewa",
-  "请通过端口 10888 访问创作功能": "Gunakan port 10888 untuk mengakses ciri penciptaan"
+  "请通过端口 10888 访问创作功能": "Gunakan port 10888 untuk mengakses ciri penciptaan",
+  "此工作区目录已不存在。确认后只移除首页登记，不会删除磁盘数据。": "Direktori ruang kerja ini sudah tiada. Jika disahkan, hanya rekod pada halaman utama akan dibuang; data pada cakera tidak akan dipadamkan.",
+  "移除失效登记": "Buang rekod lapuk",
+  "已移除失效工作区登记，磁盘数据未更改。": "Rekod ruang kerja lapuk telah dibuang. Data pada cakera tidak berubah."
 }

@@ -3953,5 +3953,8 @@
   "多租户媒体生成必须通过持久任务提交": "Yêu cầu tạo nội dung đa phương tiện ở chế độ đa đối tượng thuê phải được gửi qua tác vụ được lưu bền vững",
   "当前模式不允许切换设备连接": "Chế độ hiện tại không cho phép chuyển kết nối thiết bị",
   "多租户主机模式下不能连接其他设备": "Không thể kết nối với thiết bị khác ở chế độ máy chủ đa đối tượng thuê",
-  "请通过端口 10888 访问创作功能": "Vui lòng truy cập qua cổng 10888 để sử dụng các tính năng sáng tạo"
+  "请通过端口 10888 访问创作功能": "Vui lòng truy cập qua cổng 10888 để sử dụng các tính năng sáng tạo",
+  "此工作区目录已不存在。确认后只移除首页登记，不会删除磁盘数据。": "Thư mục không gian làm việc này không còn tồn tại. Xác nhận sẽ chỉ xóa mục đăng ký trên trang chủ, không xóa dữ liệu trên đĩa.",
+  "移除失效登记": "Xóa mục đã lỗi thời",
+  "已移除失效工作区登记，磁盘数据未更改。": "Đã xóa mục đăng ký không còn hợp lệ. Dữ liệu trên đĩa không thay đổi."
 }

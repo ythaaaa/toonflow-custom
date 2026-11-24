@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { lstat, mkdir, readFile, readdir, realpath, writeAtomic } from "@toonflow/file";
 import type { ProviderTaskData } from "@toonflow/providers";
 import type { GeneratedMedia, MediaGenerationRequest } from "@toonflow/tools-scaffold/runtime";
@@ -103,7 +103,12 @@ function taskPath(cwd: string, taskId: string) {
 }
 
 export async function hasActiveTasks(cwd: string) {
-  cwd = await realpath(cwd);
+  try { cwd = await realpath(cwd); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+    cwd = resolve(cwd);
+  }
   const workspaceIdentity = identity(cwd);
   if ([...tasks.values()].some(task => identity(task.record.cwd) === workspaceIdentity
     && (task.active || task.record.state === "running"))) return true;

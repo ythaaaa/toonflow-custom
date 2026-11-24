@@ -142,6 +142,7 @@ import type { AgentAttachment } from "@/components/agent/types";
 import type { HomeAdvertisement, HomeAdvertisements } from "@toonflow/server/channel";
 import logoUrl from "@toonflow/assets/logo.svg";
 import { useWorkspaceStore, type Project } from "@/stores/workspace";
+import { saveSettings } from "@/stores/settings";
 import { currentUser, publicWeb } from "@/stores/multiTenant";
 import { hasDesktopUpdate } from "@/stores/desktopUpdate";
 import { deviceHubEnabled, mobileConnection, mobileConnectionLabel } from "@/lib/mobile";
@@ -572,32 +573,36 @@ async function deleteWorkspace(project: Project) {
   if (creating.value || opening.value || exportingDirectory.value || deletingWorkspaceId.value) return;
   deletingWorkspaceId.value = project.id;
   try {
-    const { data } = await axios.get<{ code: number; data?: { workspaceId: string; name: string; counts: { dramas: number; canvases: number; assets: number }; busy: boolean }; message?: string }>("/api/workspaces/summary", {
+    const { data } = await axios.get<{ code: number; data?: { workspaceId: string; name: string; counts: { dramas: number; canvases: number; assets: number }; busy: boolean; directoryExists: boolean }; message?: string }>("/api/workspaces/summary", {
       params: { workspaceId: project.id, directory: project.directory },
       headers: { "x-toonflow-workspace": "1" }, signal: pageLifetime.signal,
     });
-    if (data.code !== 200 || !data.data || data.data.workspaceId !== project.id) throw new Error(data.message || "读取工作区信息失败");
+    if (data.code !== 200 || !data.data || data.data.workspaceId !== project.id || typeof data.data.directoryExists !== "boolean") throw new Error(data.message || "读取工作区信息失败");
     if (data.data.busy) {
       ElMessage.warning("工作区正在执行生成或 Agent 任务，请等待任务结束后再删除。");
       return;
     }
+    const directoryMissing = !data.data.directoryExists;
     const confirmed = await ElMessageBox.confirm(
-      `工作区：${data.data.name}\n包含短剧 ${data.data.counts.dramas} 个、画布 ${data.data.counts.canvases} 个、素材 ${data.data.counts.assets} 个。删除后工作区目录及其中的数据将无法恢复。`,
+      directoryMissing
+        ? translate("此工作区目录已不存在。确认后只移除首页登记，不会删除磁盘数据。")
+        : `工作区：${data.data.name}\n包含短剧 ${data.data.counts.dramas} 个、画布 ${data.data.counts.canvases} 个、素材 ${data.data.counts.assets} 个。删除后工作区目录及其中的数据将无法恢复。`,
       "删除工作区",
-      { type: "warning", confirmButtonText: "删除工作区", cancelButtonText: "取消", confirmButtonClass: "el-button--danger", closeOnClickModal: false },
+      { type: "warning", confirmButtonText: directoryMissing ? translate("移除失效登记") : "删除工作区", cancelButtonText: "取消", confirmButtonClass: "el-button--danger", closeOnClickModal: false },
     ).then(() => true, () => false);
     if (!confirmed) return;
-    const result = await axios.delete<{ code: number; data?: { workspaceId: string }; message?: string }>("/api/workspaces/remove", {
-      data: { workspaceId: project.id, directory: project.directory },
+    const result = await axios.delete<{ code: number; data?: { workspaceId: string; directoryRemoved: boolean }; message?: string }>("/api/workspaces/remove", {
+      data: { workspaceId: project.id, directory: project.directory, expectMissing: directoryMissing },
       headers: { "x-toonflow-workspace": "1" }, signal: pageLifetime.signal,
     });
-    if (result.data.code !== 200 || result.data.data?.workspaceId !== project.id) throw new Error(result.data.message || "删除工作区失败");
+    if (result.data.code !== 200 || result.data.data?.workspaceId !== project.id || result.data.data.directoryRemoved === directoryMissing) throw new Error(result.data.message || "删除工作区失败");
     workspaceStore.removeProject(project.id);
-    ElMessage.success(`工作区“${data.data.name}”已删除。`);
+    await saveSettings();
+    ElMessage.success(directoryMissing ? translate("已移除失效工作区登记，磁盘数据未更改。") : `工作区“${data.data.name}”已删除。`);
   } catch (error) {
     if (pageLifetime.signal.aborted) return;
     const message = axios.isAxiosError<{ message?: string }>(error)
-      ? error.response?.data.message || "删除工作区失败，请重试"
+      ? error.response?.data.message || (error.response ? "删除工作区失败，请重试" : translate("无法连接 Toonflow 本机服务，请确认应用已正常运行后重试。"))
       : error instanceof Error ? error.message : "删除工作区失败，请重试";
     ElMessage.error(message);
   } finally {

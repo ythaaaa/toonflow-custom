@@ -12837,5 +12837,14 @@
   "请通过端口 10888 访问创作功能": [
     "apps/server/src/utils/multiTenant/runtime.ts",
     "apps/server/src/utils/mobileLink/index.ts"
+  ],
+  "此工作区目录已不存在。确认后只移除首页登记，不会删除磁盘数据。": [
+    "apps/web/src/pages/home/index.vue"
+  ],
+  "移除失效登记": [
+    "apps/web/src/pages/home/index.vue"
+  ],
+  "已移除失效工作区登记，磁盘数据未更改。": [
+    "apps/web/src/pages/home/index.vue"
   ]
 }
