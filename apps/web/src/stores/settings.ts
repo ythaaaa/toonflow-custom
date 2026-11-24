@@ -171,13 +171,8 @@ export type CodexOAuthTestStatus = {
 };
 const availableCodexOAuthTestModels = ref<ResolvedAiModel[]>([]);
 export const codexOAuthTestModels = computed(() => availableCodexOAuthTestModels.value.map(model => ({ ...model, value: getNodeModelKey(model) })));
-export const localCodexModelChoice = { providerId: "localCodex", providerLabel: "本机 Codex Bridge", modelId: "codex", label: "本机 Codex", contextWindow: 262144, reasoningLevels: [] as ThinkingLevel[], value: JSON.stringify(["localCodex", "codex"]) };
 
 export async function refreshCodexOAuthTestModels(refresh = false) {
-  if (!import.meta.env.DEV) {
-    availableCodexOAuthTestModels.value = [];
-    return { status: "disconnected", models: [] } satisfies CodexOAuthTestStatus;
-  }
   const { data } = await axios.get<{ code: number; data: CodexOAuthTestStatus; message?: string }>("/api/agent/codexOAuth/status", {
     params: refresh ? { refresh: "1" } : undefined,
     headers: { "x-toonflow-workspace": "1", "Cache-Control": "no-cache" },

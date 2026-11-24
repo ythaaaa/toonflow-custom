@@ -3,7 +3,6 @@ import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-code
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { currentIdentity } from "@/utils/multiTenant/context";
 import { isEnabled } from "@/utils/multiTenant/mode";
-import { getRuntimePlatform } from "@/lib/platform";
 import { thinkingLevels, type ThinkingLevel } from "@/lib/modelReasoning";
 
 const providerId = "toonflowCodexOAuthTest";
@@ -72,8 +71,8 @@ async function getCodexClientVersion() {
 }
 
 function requireCodexOAuthTest() {
-  if (!getRuntimePlatform().development || isEnabled()) {
-    throw Object.assign(new Error("Codex OAuth PoC 仅在独立开发环境中开放"), { status: 404 });
+  if (isEnabled()) {
+    throw Object.assign(new Error("Codex OAuth PoC 在多租户环境中不可用"), { status: 404 });
   }
 }
 
@@ -189,7 +188,7 @@ async function refreshCatalog(state: AccountState, fresh = false): Promise<Accou
 }
 
 export async function listCodexOAuthTestModels() {
-  if (!getRuntimePlatform().development || isEnabled()) return [];
+  if (isEnabled()) return [];
   const state = accounts.get(accountKey());
   if (!state) return [];
   try {
@@ -201,7 +200,7 @@ export async function listCodexOAuthTestModels() {
 }
 
 export async function getCodexOAuthTestStatus(refresh = false): Promise<OAuthStatus> {
-  if (!getRuntimePlatform().development || isEnabled()) return { status: "disconnected", models: [] };
+  if (isEnabled()) return { status: "disconnected", models: [] };
   const state = accounts.get(accountKey());
   if (!state) return { status: "disconnected", models: [] };
   const credential = await state.credentials.read(providerId);

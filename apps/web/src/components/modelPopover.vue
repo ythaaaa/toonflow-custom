@@ -70,23 +70,23 @@
 import { computed, onBeforeUnmount, ref, useId, watch } from "vue";
 import axios from "axios";
 import { IconChevronDown, IconChevronUp } from "@tabler/icons-vue";
+import { ElMessage } from "element-plus";
 import { modelIcon } from "@toonflow/model-icons";
 import { useNodeModelSelection } from "@toonflow/nodes-scaffold/nodeAi";
 import modelLabel from "@toonflow/node-shared/modelLabel";
 import type { ThinkingLevel } from "@toonflow/server/modelReasoning";
-import { codexOAuthTestModels, localCodexModelChoice, modelChoices, refreshCodexOAuthTestModels, refreshModelChoices, type CodexOAuthTestStatus } from "@/stores/settings";
+import { codexOAuthTestModels, modelChoices, refreshCodexOAuthTestModels, refreshModelChoices, type CodexOAuthTestStatus } from "@/stores/settings";
 
 const selectedModel = defineModel<string>({ default: "" });
 const reasoningEffort = defineModel<string>("reasoningEffort", { default: "" });
-const props = withDefaults(defineProps<{ active?: boolean; disabled?: boolean; allowLocalCodex?: boolean; allowCodexOAuthTest?: boolean }>(), { active: true, disabled: false, allowLocalCodex: false, allowCodexOAuthTest: false });
+const props = withDefaults(defineProps<{ active?: boolean; disabled?: boolean; allowCodexOAuthTest?: boolean }>(), { active: true, disabled: false, allowCodexOAuthTest: false });
 const visible = ref(false);
 const reasoningId = useId();
 const reasoningLabels: Record<ThinkingLevel, string> = { off: "关闭", minimal: "最小", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高" };
-const showCodexOAuthTest = computed(() => import.meta.env.DEV && props.allowCodexOAuthTest);
+const showCodexOAuthTest = computed(() => props.allowCodexOAuthTest);
 const choices = computed(() => [
   ...modelChoices.value,
   ...(showCodexOAuthTest.value ? codexOAuthTestModels.value : []),
-  ...(props.allowLocalCodex ? [localCodexModelChoice] : []),
 ]);
 const codexOAuthStatus = ref<CodexOAuthTestStatus>({ status: "disconnected", models: [] });
 const codexLoginLoading = ref(false);

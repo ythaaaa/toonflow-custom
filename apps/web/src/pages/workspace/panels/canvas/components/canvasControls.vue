@@ -9,6 +9,7 @@
     maskColor="var(--el-mask-color-extra-light)"
     @click="({ position }) => setCenter(position.x, position.y, { zoom: viewport.zoom, duration: 250 })" />
   <panel class="canvasControlsPanel" position="bottom-left">
+    <div class="assetLibraryAnchor"><slot /></div>
     <el-card class="canvasControlsCard" shadow="never" :bodyStyle="{ padding: '2px 4px' }">
       <div class="canvasControls">
         <el-tooltip v-if="currentUser?.role !== 'user'" :showArrow="false" :content="assetsVisible ? '关闭素材库' : '打开素材库'" placement="top" :hideAfter="0" :enterable="false" :triggerKeys="[]">
@@ -217,6 +218,12 @@ async function undoArrange() {
 }
 
 .canvasControlsCard { height: 34px; box-sizing: border-box; }
+
+.assetLibraryAnchor {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+}
 
 .canvasControls {
   display: flex;

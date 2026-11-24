@@ -5,8 +5,6 @@
       <div>范围：当前画布、选中节点及其直接关系；关联人物 {{ canvasSnapshot.nodes[0]?.characters.length ?? 0 }}、场景 {{ canvasSnapshot.nodes[0]?.scene ? 1 : 0 }}、素材 {{ canvasSnapshot.nodes[0]?.assets.length ?? 0 }}</div>
       <pre>{{ JSON.stringify(canvasSnapshot, null, 2) }}</pre>
     </details>
-    <localCodexConversation v-if="selectedModelChoice?.providerId === 'localCodex' && !allowCodexOAuthTest" v-model:selectedModel="selectedModel" :directory="directory" />
-    <template v-else>
     <messageList
       :messages="messages"
       :directory="directory"
@@ -65,7 +63,6 @@
       :allowCodexOAuthTest="allowCodexOAuthTest"
       @submit="submitMessage"
       @stop="stopMessage" />
-    </template>
   </div>
 </template>
 
@@ -82,7 +79,7 @@ import { onAgentStopped, stopAgent } from "@/lib/agentControl";
 import { writeClipboardText } from "@/lib/clipboard";
 import { showNotification } from "@/lib/notification";
 import anonymousData from "@/lib/anonymousData";
-import { codexOAuthTestModels, localCodexModelChoice, modelChoices, refreshCodexOAuthTestModels, refreshModelChoices } from "@/stores/settings";
+import { codexOAuthTestModels, modelChoices, refreshCodexOAuthTestModels, refreshModelChoices } from "@/stores/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { AgentAttachment, AgentConversation, AgentMessage } from "./types";
 import type { AgentCanvasSnapshot, AgentEvent, AgentQueue, AgentQueuedMessage } from "@toonflow/server/agent/types";
@@ -91,7 +88,6 @@ import { mentionPlainText } from "./mentionText";
 import type { CanvasContext } from "@toonflow/tool-canvas/runtime";
 import messageList from "./conversation/messageList.vue";
 import messageInput from "./conversation/messageInput.vue";
-import localCodexConversation from "./localCodexConversation.vue";
 
 const props = defineProps<{ active: boolean; initialSession: AgentConversation | null; initialModel?: string; sessionFile?: string; disabled: boolean; branchingId?: string }>();
 const emit = defineEmits<{ session: [file: string]; sent: [prompt: string]; event: [event: AgentEvent]; branch: [message: AgentMessage] }>();
@@ -130,15 +126,15 @@ const pendingRunIds = new Set<string>();
 let connected = false;
 let receivingForwardedStream = false;
 const pendingMessage = props.initialSession?.parentFile ? undefined : workspaceStore.pendingAgentMessage;
-const selectedModel = ref(pendingMessage?.model ?? (props.initialSession?.providerId && props.initialSession.modelId
-  ? JSON.stringify([props.initialSession.providerId, props.initialSession.modelId]) : props.initialModel ?? localStorage.getItem("toonflowLocalCodexModel") ?? ""));
-watch(selectedModel, value => { if (value === JSON.stringify(["localCodex", "codex"])) localStorage.setItem("toonflowLocalCodexModel", value); else localStorage.removeItem("toonflowLocalCodexModel"); });
+const initialModel = pendingMessage?.model ?? (props.initialSession?.providerId && props.initialSession.modelId
+  ? JSON.stringify([props.initialSession.providerId, props.initialSession.modelId]) : props.initialModel ?? "");
+const selectedModel = ref(initialModel === JSON.stringify(["localCodex", "codex"]) ? "" : initialModel);
 const reasoningEffort = ref(pendingMessage?.reasoningEffort ?? props.initialSession?.thinkingLevel ?? "");
-const allowCodexOAuthTest = import.meta.env.DEV;
-const selectedModelChoice = useNodeModelSelection(computed(() => [...modelChoices.value, ...codexOAuthTestModels.value, localCodexModelChoice]), selectedModel);
+const allowCodexOAuthTest = true;
+const selectedModelChoice = useNodeModelSelection(computed(() => [...modelChoices.value, ...codexOAuthTestModels.value]), selectedModel);
 const contextWindow = computed(() => contextUsage.value?.contextWindow ?? selectedModelChoice.value?.contextWindow ?? 262144);
 watch(() => props.active, active => {
-  if (active && import.meta.env.DEV) void refreshCodexOAuthTestModels().catch(() => {});
+  if (active) void refreshCodexOAuthTestModels().catch(() => {});
 }, { immediate: true });
 function showSteeringMessage(message: AgentQueuedMessage) {
   if (messages.value.some(item => item.role === "user" && (item.queueId === message.id || item.id === message.id))) return;

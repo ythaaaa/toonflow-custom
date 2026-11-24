@@ -37,7 +37,6 @@
         </el-popover>
       </div>
     </el-card>
-    <div class="menuExtension"><slot /></div>
   </panel>
   <panel v-if="providerBalances.length" class="balanceMenuPanel" position="top-right">
     <div class="balanceList" tabindex="0" aria-label="供应商余额">
@@ -913,12 +912,6 @@ defineExpose({ getCanvases, peekCanvases, initialized, addCanvas, switchCanvas, 
       white-space: nowrap;
     }
   }
-}
-
-.menuExtension {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
 }
 
 .canvasMenu {
