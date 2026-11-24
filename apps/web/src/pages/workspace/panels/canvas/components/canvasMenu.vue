@@ -811,11 +811,20 @@ defineExpose({ getCanvases, peekCanvases, initialized, addCanvas, switchCanvas, 
 
 <style lang="scss" scoped>
 .canvasMenuPanel.vue-flow__panel {
-  left: 0;
+  // The workspace card is 3 × 28px buttons + 2 × 2px gaps + 8px padding + 2px border.
+  left: calc(98px + 8px);
   display: flex;
   align-items: center;
   gap: 12px;
   max-width: calc(50% - 90px);
+}
+
+@container canvasWorkspace (max-width: 1200px) {
+  .canvasMenuPanel.vue-flow__panel {
+    top: 43px;
+    left: 0;
+    max-width: calc(100% - 30px);
+  }
 }
 
 .balanceMenuPanel.vue-flow__panel {
@@ -915,21 +924,23 @@ defineExpose({ getCanvases, peekCanvases, initialized, addCanvas, switchCanvas, 
 }
 
 .canvasMenu {
-  margin-left: 76px;
   min-width: 0;
+  max-width: calc(100cqw - 30px);
 
   .menuContent {
     display: flex;
     align-items: center;
     gap: 2px;
+    min-width: 0;
 
-    .el-divider { margin: 0 3px; }
+    .el-divider { margin: 0 3px; flex-shrink: 0; }
 
     .workspaceNameInput {
       width: auto;
       height: 28px;
-      min-width: 2em;
+      min-width: 0;
       max-width: 180px;
+      overflow: hidden;
       font-size: 13px;
 
       &::after {
@@ -950,6 +961,7 @@ defineExpose({ getCanvases, peekCanvases, initialized, addCanvas, switchCanvas, 
         font-family: inherit;
         font-weight: inherit;
         letter-spacing: inherit;
+        text-overflow: ellipsis;
       }
     }
 
@@ -959,7 +971,8 @@ defineExpose({ getCanvases, peekCanvases, initialized, addCanvas, switchCanvas, 
       padding: 0 3px;
       font-size: 13px;
       :deep(> span) { display: flex; align-items: center; gap: 4px; min-width: 0; }
-      span { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+      span { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      svg { flex-shrink: 0; }
     }
 
   }

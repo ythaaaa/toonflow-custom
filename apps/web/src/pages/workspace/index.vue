@@ -10,15 +10,6 @@
       :aria-hidden="activePanel !== 'canvas'"
       :active="activePanel === 'canvas'"
       :settingsVisible="settingsVisible" />
-    <div v-if="activePanel === 'canvas' && dramaCanvasContext" class="dramaCanvasContext">
-      <el-button size="small" @click="returnToEpisodeList">返回剧集列表</el-button>
-      <span class="contextBreadcrumb"><strong>{{ dramaCanvasContext.projectName }}</strong><span>/</span><span>{{ dramaCanvasContext.seasonName }}</span><span>/</span><strong>EP{{ String(dramaCanvasContext.episodeNumber).padStart(3, '0') }} · {{ dramaCanvasContext.episodeTitle }}</strong></span>
-      <div class="contextActions">
-        <el-button size="small" :disabled="dramaCanvasIndex <= 0" @click="stepDramaEpisode(-1)">上一集</el-button>
-        <el-button size="small" :disabled="dramaCanvasIndex < 0 || dramaCanvasIndex >= dramaCanvasContext.episodes.length - 1" @click="stepDramaEpisode(1)">下一集</el-button>
-        <el-button size="small" @click="openAuxiliaryTimeline">辅助时间线</el-button>
-      </div>
-    </div>
     <keep-alive :key="workspaceStore.project?.directory" :max="1">
       <documentPanel
         v-if="activePanel === 'document'"
@@ -37,6 +28,15 @@
     <dramaCenter v-if="activePanel === 'drama'" class="dramaPanel" :initialProjectId="dramaCanvasContext?.projectId" :initialEpisodeId="dramaCanvasContext?.episodeId" :initialSection="dramaInitialSection" @returnWorkspace="switchPanel('canvas')" @openCanvas="openDramaCanvas" />
     <workspaceMenu class="workspaceMenu" @openSettings="settingsVisible = true" @openDrama="switchPanel('drama')" />
     <div class="workspaceTools">
+      <div v-if="activePanel === 'canvas' && dramaCanvasContext" class="dramaCanvasContext">
+        <el-button size="small" @click="returnToEpisodeList">返回剧集列表</el-button>
+        <span class="contextBreadcrumb"><strong>{{ dramaCanvasContext.projectName }}</strong><span>/</span><span>{{ dramaCanvasContext.seasonName }}</span><span>/</span><strong>EP{{ String(dramaCanvasContext.episodeNumber).padStart(3, '0') }} · {{ dramaCanvasContext.episodeTitle }}</strong></span>
+        <div class="contextActions">
+          <el-button size="small" :disabled="dramaCanvasIndex <= 0" @click="stepDramaEpisode(-1)">上一集</el-button>
+          <el-button size="small" :disabled="dramaCanvasIndex < 0 || dramaCanvasIndex >= dramaCanvasContext.episodes.length - 1" @click="stepDramaEpisode(1)">下一集</el-button>
+          <el-button size="small" @click="openAuxiliaryTimeline">辅助时间线</el-button>
+        </div>
+      </div>
       <el-segmented :modelValue="activePanel" class="panelSwitcher" :options="panelOptions" size="small" aria-label="切换面板" @change="switchPanel">
         <template #default="{ item }">
           <span class="panelOption">
@@ -611,6 +611,15 @@ function saveDocumentNode(directory: string, canvasPath: string, nodeId: string,
         line-height: 22px;
         font-weight: 500;
       }
+    }
+
+    @container workspaceTools (max-width: 1200px) {
+      .dramaCanvasContext { top: 100px; }
+    }
+
+    @container workspaceTools (max-width: 450px) {
+      .panelSwitcher { top: 100px; }
+      .dramaCanvasContext { top: 142px; }
     }
 
     .bottomTools {
