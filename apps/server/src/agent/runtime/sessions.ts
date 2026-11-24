@@ -102,6 +102,16 @@ export function getActiveAgentSession(path: string) {
   return activeSessions.get(sessionKey(path));
 }
 
+export async function hasActiveAgentRun(path: string) {
+  const directory = sessionKey(path);
+  if (activeSessions.has(directory)) return true;
+  for (const run of activeRuns.values()) {
+    const activeDirectory = await run.directory.catch(() => undefined);
+    if (activeDirectory && sessionKey(activeDirectory) === directory && activeRuns.get(run.runId) === run) return true;
+  }
+  return false;
+}
+
 export function getQueuedMessageId(message: object) {
   let id = queuedMessageIds.get(message);
   if (!id) { id = crypto.randomUUID(); queuedMessageIds.set(message, id); }

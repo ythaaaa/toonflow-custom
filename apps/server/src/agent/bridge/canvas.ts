@@ -17,6 +17,9 @@ export function createCanvasContext(cwd: string, canvas: CanvasInfo, send: (even
   const context: CanvasContext = {
     ...canvas,
     async call(request, signal) {
+      if (!["getCanvas", "findCanvasNodes", "getCanvasNodes", "getCanvasEdges"].includes(request.name)) {
+        throw new Error("M4.7.1 画布对话仅允许只读查询");
+      }
       // 前端顺序执行画布变更；轮到当前调用再发送和计时，避免排队消耗执行超时。
       const pending = queue.then(() => {
         if (disposed) throw new Error("画布调用所属对话已结束");

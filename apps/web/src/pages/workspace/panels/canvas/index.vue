@@ -97,7 +97,7 @@
         :selectionBusy="selectionToolbarRef?.busy"
         :batchHistory="canvasHistory.batch"
         :dramaContext="!!dramaCanvasState"
-        :createDramaNode="createDramaCanvasNode"
+        :importDramaScript="openDramaScriptImport"
         :archiveDramaNode="archiveDramaCanvasNode"
         @duplicateSelection="selectionToolbarRef?.operate('duplicate')"
         @history="canvasHistory.commit"
@@ -112,6 +112,11 @@
         :disabled="!canvasId || !project?.directory" />
       <nodeSearch ref="nodeSearchRef" :disabled="!active || settingsVisible || !canvasId || !project?.directory" />
     </vue-flow>
+    <dramaScriptImport
+      v-if="dramaScriptImportVisible && dramaCanvasState"
+      :state="dramaCanvasState"
+      :mutateProject="mutateDramaProject"
+      @closed="dramaScriptImportVisible = false" />
     <dramaCanvasShotPanel
       v-if="selectedDramaBinding && dramaCanvasState"
       :key="`${selectedDramaBinding.episodeId}:${selectedDramaBinding.shotId}`"
@@ -208,12 +213,13 @@ import type { NodeDocumentContext, NodeDocumentState } from "@toonflow/nodes-sca
 import { useNodeToolsContext } from "@toonflow/nodes-scaffold/nodeTools";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { waitForControlValue } from "@/lib/mcpControl";
-import { archiveCharacter, archiveScene, archiveShot, createCharacter, createScene, createShot, duplicateCharacter, duplicateScene, duplicateShot, listDramaProjects, saveDramaProject, type DramaAsset, type DramaEpisode, type DramaProject } from "@/lib/dramaWorkspace";
+import { archiveCharacter, archiveScene, archiveShot, duplicateCharacter, duplicateScene, duplicateShot, listDramaProjects, saveDramaProject, type DramaAsset, type DramaEpisode, type DramaProject } from "@/lib/dramaWorkspace";
 import type { DramaWorkspaceFiles } from "@toonflow/drama-workspace";
 import { dramaCanvasBindingKey, dramaCanvasEdgeId, dramaCanvasNodeId, dramaCanvasStateKey, dramaNodeHandles, isDramaCanvasRelationKind, readDramaCanvasBinding, resolveDramaCanvasRelation, type DramaCanvasBinding, type DramaCanvasRelation, type DramaCanvasRelationChange, type DramaCanvasState, type DramaCanvasRole } from "@/lib/dramaCanvas";
 import dramaCanvasNode from "./components/dramaCanvasNode.vue";
 import dramaCanvasShotPanel from "./components/dramaCanvasShotPanel.vue";
 import dramaCanvasEntityPanel from "./components/dramaCanvasEntityPanel.vue";
+import dramaScriptImport from "./components/dramaScriptImport.vue";
 import { currentUser } from "@/stores/multiTenant";
 import { generalSettings } from "@/stores/settings";
 import { getShortcutBindings, shortcutLabel, shortcutMatches, shortcutPressed } from "@/lib/canvasShortcuts";
@@ -225,7 +231,7 @@ import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/minimap/dist/style.css";
 
 type DramaCanvasTarget = { projectId: string; episodeId: string };
-type DramaProjectMutation = (files: DramaWorkspaceFiles, project: DramaProject, manifestPath: string) => Promise<void>;
+type DramaProjectMutation = (files: DramaWorkspaceFiles, project: DramaProject, manifestPath: string) => Promise<unknown>;
 type CanvasActivation = { canvasId: string; openDramaCanvas: (target: DramaCanvasTarget, signal?: AbortSignal) => Promise<string> };
 
 const props = withDefaults(defineProps<{
@@ -278,6 +284,7 @@ const assetLibraryRef = ref<InstanceType<typeof assetLibrary>>();
 const edgeDisconnect = ref<{ id: string; x: number; y: number }>();
 const flow = useVueFlow(props.runtimeKey);
 const dramaCanvasState = shallowRef<DramaCanvasState>();
+const dramaScriptImportVisible = ref(false);
 provide(dramaCanvasStateKey, dramaCanvasState);
 const selectedDramaBinding = computed(() => {
   for (const node of flow.getSelectedNodes.value.slice().reverse()) {
@@ -557,9 +564,11 @@ function dramaNodeSpec(role: DramaCanvasRole, projectId: string, episodeId: stri
   return { binding: { role, projectId, episodeId, ...ids }, label, position, handles: structuredClone(dramaNodeHandles[role]), deletable: role === "character" || role === "scene" || role === "shot" };
 }
 
-function buildDramaCanvasSpecs(project: DramaCanvasState["project"], episode: DramaEpisode) {
+function buildDramaCanvasSpecs(project: DramaCanvasState["project"], episode: DramaEpisode, layoutVersion: 1 | 2 = 2) {
   const nodes: DramaNodeSpec[] = [];
   const edges: { sourceBinding: DramaCanvasBinding; sourceHandle: string; targetBinding: DramaCanvasBinding; targetHandle: string }[] = [];
+  const sceneRowGap = layoutVersion === 1 ? 500 : 700;
+  const generatorOffset = layoutVersion === 1 ? 210 : 280;
   const versions = project.scriptVersions[episode.id] ?? [];
   const formalVersion = versions.find(item => item.id === episode.formalVersionId);
   const scriptVersion = formalVersion ?? versions.filter(item => item.status !== "已归档").slice().sort((left, right) => right.version - left.version)[0];
@@ -584,7 +593,7 @@ function buildDramaCanvasSpecs(project: DramaCanvasState["project"], episode: Dr
   const addShot = (shot: DramaEpisode["shots"][number], position: XYPosition, scene?: DramaEpisode["scenes"][number]) => {
     const order = shot.order ?? shots.indexOf(shot) + 1;
     const shotBinding = dramaNodeSpec("shot", project.id, episode.id, shot.number, position, { shotId: shot.id, sceneId: shot.sceneId, order });
-    const imageBinding = dramaNodeSpec("gptImage", project.id, episode.id, `${shot.number} GPT 会员生图`, { x: position.x, y: position.y + 210 }, { shotId: shot.id, sceneId: shot.sceneId, order });
+    const imageBinding = dramaNodeSpec("gptImage", project.id, episode.id, `${shot.number} GPT 会员生图`, { x: position.x, y: position.y + generatorOffset }, { shotId: shot.id, sceneId: shot.sceneId, order });
     nodes.push(shotBinding, imageBinding);
     edges.push({ sourceBinding: shotBinding.binding, sourceHandle: "shot", targetBinding: imageBinding.binding, targetHandle: "shot" });
     if (scene) {
@@ -609,23 +618,23 @@ function buildDramaCanvasSpecs(project: DramaCanvasState["project"], episode: Dr
     });
   };
   scenes.forEach((scene, sceneIndex) => {
-    const sceneBinding = dramaNodeSpec("scene", project.id, episode.id, scene.heading || scene.location || `场景 ${scene.number}`, { x: 420, y: 220 + sceneIndex * 500 }, { sceneId: scene.id });
+    const sceneBinding = dramaNodeSpec("scene", project.id, episode.id, scene.heading || scene.location || `场景 ${scene.number}`, { x: 420, y: 220 + sceneIndex * sceneRowGap }, { sceneId: scene.id });
     nodes.push(sceneBinding);
     const sourceScriptVersionId = scene.sourceScriptVersionId === "" ? undefined : scene.sourceScriptVersionId ?? formalVersion?.id;
     if (scriptVersion && sourceScriptVersionId === scriptVersion.id) edges.push({ sourceBinding: script.binding, sourceHandle: "script", targetBinding: sceneBinding.binding, targetHandle: "script" });
     const sceneShots = shots.filter(shot => shot.sceneId === scene.id);
     sceneShots.forEach((shot, shotIndex) => {
       placedShots.add(shot.id);
-      addShot(shot, { x: 800 + shotIndex * 330, y: 220 + sceneIndex * 500 }, scene);
+      addShot(shot, { x: 800 + shotIndex * 330, y: 220 + sceneIndex * sceneRowGap }, scene);
     });
   });
   for (const [index, shot] of shots.filter(item => !placedShots.has(item.id)).entries()) {
-    addShot(shot, { x: 800 + index * 330, y: 220 + scenes.length * 500 }, episode.scenes.find(scene => scene.id === shot.sceneId && !scene.archived));
+    addShot(shot, { x: 800 + index * 330, y: 220 + scenes.length * sceneRowGap }, episode.scenes.find(scene => scene.id === shot.sceneId && !scene.archived));
   }
   const shotIds = new Set(shots.map(shot => shot.id));
   project.assets.filter(asset => asset.kind === "image" && (!asset.projectId || asset.projectId === project.id)
     && (!asset.episodeId || asset.episodeId === episode.id) && (!asset.shotId || !shotIds.has(asset.shotId))).forEach((asset, index) => {
-    nodes.push(dramaNodeSpec("imageAsset", project.id, episode.id, asset.name || "图片素材", { x: 420 + index * 300, y: 220 + scenes.length * 500 + 250 }, { assetId: asset.id }));
+    nodes.push(dramaNodeSpec("imageAsset", project.id, episode.id, asset.name || "图片素材", { x: 420 + index * 300, y: 220 + scenes.length * sceneRowGap + (layoutVersion === 1 ? 250 : 350) }, { assetId: asset.id }));
   });
   for (const shot of shots) {
     const generatorBinding = nodes.find(item => item.binding.role === "gptImage" && item.binding.shotId === shot.id)?.binding;
@@ -654,6 +663,7 @@ function syncDramaCanvas(project: DramaCanvasState["project"], episode: DramaEpi
 async function performDramaCanvasSync(project: DramaCanvasState["project"], episode: DramaEpisode, signal?: AbortSignal) {
   if (!canvasId.value || !canvasReady.value) throw new Error("原生画布尚未就绪");
   const { nodes: specs, edges: edgeSpecs } = buildDramaCanvasSpecs(project, episode);
+  const legacyPositions = new Map(buildDramaCanvasSpecs(project, episode, 1).nodes.map(spec => [dramaCanvasBindingKey(spec.binding), spec.position]));
   await canvasHistory.batch(async () => {
     const nodesByBinding = new Map<string, GraphNode>();
     const duplicateNodeIds: string[] = [];
@@ -668,6 +678,33 @@ async function performDramaCanvasSync(project: DramaCanvasState["project"], epis
     }
     const specKeys = new Set(specs.map(spec => dramaCanvasBindingKey(spec.binding)));
     const staleNodeIds = [...nodesByBinding.entries()].filter(([key]) => !specKeys.has(key)).map(([, node]) => node.id);
+    const anchorSpec = specs.find(spec => nodesByBinding.has(dramaCanvasBindingKey(spec.binding)));
+    const preservedNodes = flow.getNodes.value.filter(node => {
+      const binding = readDramaCanvasBinding(node.data);
+      return !binding || binding.projectId !== project.id || binding.episodeId !== episode.id;
+    });
+    // ACT: 仅迁移所有业务节点仍处于旧版默认坐标的导入图；手动移动过的图会完整保留。
+    const migrateLegacyLayout = specs.length > 0 && specs.every(spec => {
+      const existing = nodesByBinding.get(dramaCanvasBindingKey(spec.binding));
+      const legacy = legacyPositions.get(dramaCanvasBindingKey(spec.binding));
+      return !!existing && (existing.data as { dramaLayoutVersion?: number } | undefined)?.dramaLayoutVersion === undefined
+        && !!legacy && Math.abs(existing.position.x - legacy.x) < 0.01 && Math.abs(existing.position.y - legacy.y) < 0.01;
+    });
+    let offsetX = 0;
+    if (migrateLegacyLayout && preservedNodes.length) {
+      const right = Math.max(...preservedNodes.map(node => node.position.x + (node.dimensions.width || 250)));
+      const left = Math.min(...specs.map(spec => spec.position.x));
+      offsetX = Math.max(0, right + 120 - left);
+    } else if (migrateLegacyLayout) {
+      offsetX = 0;
+    } else if (anchorSpec) {
+      offsetX = nodesByBinding.get(dramaCanvasBindingKey(anchorSpec.binding))!.position.x - anchorSpec.position.x;
+    } else if (preservedNodes.length) {
+      // ACT: 首次同步只把新业务图整体放到现有节点右侧；现有节点与用户布局不移动。
+      const right = Math.max(...preservedNodes.map(node => node.position.x + (node.dimensions.width || 250)));
+      const left = Math.min(...specs.map(spec => spec.position.x));
+      offsetX = Math.max(0, right + 120 - left);
+    }
     const nodeIds = new Map<string, string>();
     for (const spec of specs) {
       signal?.throwIfAborted();
@@ -677,11 +714,17 @@ async function performDramaCanvasSync(project: DramaCanvasState["project"], epis
         const id = dramaCanvasNodeId(spec.binding);
         const collision = flow.findNode(id);
         if (collision) throw new Error(`画布节点 ID 与现有节点冲突：${id}`);
-        addNodes({ id, type: "dramaNode", position: spec.position, style: { width: "250px" }, deletable: spec.deletable, data: { label: spec.label, handles: spec.handles, dramaBinding: spec.binding } });
+        addNodes({ id, type: "dramaNode", position: { ...spec.position, x: spec.position.x + offsetX }, style: { width: "250px" }, deletable: spec.deletable, data: { label: spec.label, handles: spec.handles, dramaBinding: spec.binding, dramaLayoutVersion: 2 } });
         nodeIds.set(key, id);
         continue;
       }
-      flow.updateNodeData(existing.id, { label: spec.label, handles: spec.handles, dramaBinding: spec.binding });
+      flow.updateNodeData(existing.id, {
+        label: spec.label,
+        handles: spec.handles,
+        dramaBinding: spec.binding,
+        dramaLayoutVersion: migrateLegacyLayout ? 2 : ((existing.data as { dramaLayoutVersion?: number } | undefined)?.dramaLayoutVersion ?? 1),
+      });
+      if (migrateLegacyLayout) flow.updateNode(existing.id, { position: { ...spec.position, x: spec.position.x + offsetX } });
       flow.updateNode(existing.id, { deletable: spec.deletable });
       nodeIds.set(key, existing.id);
     }
@@ -934,6 +977,11 @@ function refreshDramaCanvasState() {
   if (episode) void syncDramaCanvas(state.project, episode).catch(error => ElMessage.error(error instanceof Error ? error.message : "同步短剧画布失败"));
 }
 
+function openDramaScriptImport() {
+  if (!dramaCanvasState.value) { ElMessage.warning("请先打开一个短剧分集画布"); return; }
+  dramaScriptImportVisible.value = true;
+}
+
 function closeDramaEntityPanel(binding: DramaCanvasBinding) {
   const selectedNode = flow.getSelectedNodes.value.find(node => {
     const selectedBinding = readDramaCanvasBinding(node.data);
@@ -1006,37 +1054,6 @@ async function confirmDramaProjectWrite(state: DramaCanvasState, expectedCanvasI
     await flushCanvasSave();
   }
   return entry.project;
-}
-
-async function createDramaCanvasNode(kind: "character" | "scene" | "shot", position: XYPosition) {
-  const state = dramaCanvasState.value;
-  if (!state) throw new Error("当前画布没有短剧业务上下文");
-  const expectedCanvasId = canvasId.value;
-  await enqueueDramaMutation(async () => {
-    const { files, project, manifestPath } = await readCurrentDramaProject(state, expectedCanvasId);
-    const created = kind === "character" ? await createCharacter(files, project, {}, manifestPath)
-      : kind === "scene" ? await createScene(files, project, state.episodeId, {}, manifestPath)
-      : await createShot(files, project, state.episodeId, { sceneId: "" }, manifestPath);
-    const saved = await confirmDramaProjectWrite(state, expectedCanvasId);
-    const record = kind === "character" ? saved.characters.find(item => item.id === created.id)
-      : kind === "scene" ? saved.episodes.find(item => item.id === state.episodeId)?.scenes.find(item => item.id === created.id)
-      : saved.episodes.find(item => item.id === state.episodeId)?.shots.find(item => item.id === created.id);
-    if (!record || record.archived) throw new Error("短剧记录写入后回读不一致；画布未添加节点");
-    if (canvasId.value !== expectedCanvasId || dramaCanvasState.value?.project.id !== saved.id) return;
-    const binding: DramaCanvasBinding = kind === "character"
-      ? { role: "character", projectId: saved.id, episodeId: state.episodeId, characterId: created.id }
-      : kind === "scene"
-        ? { role: "scene", projectId: saved.id, episodeId: state.episodeId, sceneId: created.id }
-        : { role: "shot", projectId: saved.id, episodeId: state.episodeId, shotId: created.id, sceneId: created.sceneId, order: created.order };
-    await waitForControlValue(() => flow.findNode(dramaCanvasNodeId(binding)) ?? undefined, canvasController.signal);
-    const node = flow.findNode(dramaCanvasNodeId(binding));
-    if (!node) throw new Error("短剧记录已保存，但对应画布节点未能创建");
-    flow.updateNode(node.id, { position: { ...position } });
-    await flushCanvasSave();
-    flow.removeSelectedNodes(flow.getSelectedNodes.value);
-    flow.nodesSelectionActive.value = true;
-    flow.addSelectedNodes([node]);
-  });
 }
 
 async function duplicateDramaCanvasNode(node: GraphNode, position: XYPosition) {
@@ -1190,7 +1207,47 @@ watch(() => [canvasId.value, props.active, canvasReady.value, project.value?.dir
   void loadDramaCanvasState(request, expectedCanvasId).catch(error => ElMessage.error(error instanceof Error ? error.message : "读取短剧画布关联失败"));
 }, { flush: "post", immediate: true });
 
-defineExpose({ canvasId, canvasReady, getCanvasContext, addNodeAtPointer, readDocumentNode, saveDocumentNode, mountDocumentNode, observeDocumentNode, prepareCanvasDelete, flushSave: flushCanvasSave, cancelSave: cancelCanvasSave,
+function getAgentContextSnapshot() {
+  const state = dramaCanvasState.value;
+  const selected = flow.getSelectedNodes.value.slice(0, 20);
+  const selectedIds = new Set(selected.map(node => node.id));
+  const adjacentIds = new Set([...selectedIds]);
+  for (const edge of flow.getEdges.value) {
+    if (selectedIds.has(edge.source) || selectedIds.has(edge.target)) {
+      adjacentIds.add(edge.source);
+      adjacentIds.add(edge.target);
+    }
+  }
+  const episode = state?.project.episodes.find(item => item.id === state.episodeId);
+  const nodes = selected.map(node => {
+    const binding = readDramaCanvasBinding(node.data);
+    const shot = episode?.shots.find(item => item.id === binding?.shotId);
+    const scene = episode?.scenes.find(item => item.id === (binding?.sceneId ?? shot?.sceneId));
+    const character = state?.project.characters.find(item => item.id === binding?.characterId);
+    const asset = state?.project.assets.find(item => item.id === binding?.assetId);
+    const characterIds = shot?.characterIds ?? scene?.characters ?? [];
+    const characters = character ? [character] : state?.project.characters.filter(item => characterIds.includes(item.id) || characterIds.includes(item.name)) ?? [];
+    const assetIds = shot ? [shot.firstFrameAssetId, shot.lastFrameAssetId, ...(shot.referenceAssetIds ?? [])].filter((id): id is string => !!id) : [];
+    const assets = asset ? [asset] : state?.project.assets.filter(item => assetIds.includes(item.id) || item.shotId === shot?.id) ?? [];
+    return {
+      id: node.id, type: node.type ?? "", label: String(node.data.label ?? node.label ?? node.id).slice(0, 200),
+      business: binding ?? null, data: binding ? null : Object.fromEntries(Object.entries(node.data ?? {}).slice(0, 12).map(([key, value]) => [key, typeof value === "string" ? value.slice(0, 2000) : typeof value === "number" || typeof value === "boolean" ? value : null])),
+      shot: shot ?? null, scene: scene ?? null, characters: characters.slice(0, 30), assets: assets.slice(0, 30),
+    };
+  });
+  const relations = flow.getEdges.value.filter(edge => adjacentIds.has(edge.source) || adjacentIds.has(edge.target)).slice(0, 100).map(edge => ({
+    source: edge.source, target: edge.target,
+    relation: (edge.data as { dramaRelation?: unknown } | undefined)?.dramaRelation ?? null,
+  }));
+  return {
+    directory: project.value?.directory ?? "",
+    canvasId: canvasId.value, projectId: state?.project.id ?? null, projectName: state?.project.name ?? null,
+    episodeId: episode?.id ?? null, episodeName: episode?.title ?? null,
+    selectedNodeIds: selected.map(node => node.id), nodes, relations,
+  };
+}
+
+defineExpose({ canvasId, canvasReady, getCanvasContext, getAgentContextSnapshot, addNodeAtPointer, readDocumentNode, saveDocumentNode, mountDocumentNode, observeDocumentNode, prepareCanvasDelete, flushSave: flushCanvasSave, cancelSave: cancelCanvasSave,
   openDramaCanvas,
   openNodeSearch: () => nodeSearchRef.value?.open(),
   getCanvases: (signal?: AbortSignal) => {

@@ -144,6 +144,11 @@ function dramaFiles(directory: string): DramaWorkspaceFiles {
     },
     async writeJson(path, content, exclusive = false) { return this.write(path, `${JSON.stringify(content, null, 2)}\n`, exclusive); },
     async mkdir(path) { await mkdir(await pathOf(path, true), { recursive: true }); },
+    async remove(path, recursive = false) {
+      const target = await pathOf(path);
+      protectWorkspaceRoot(directory, target);
+      await removeWorkspaceFile(directory, target, recursive);
+    },
   };
 }
 

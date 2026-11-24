@@ -1,20 +1,29 @@
 <template>
   <main class="dramaCenter">
     <header class="dramaHeader">
-      <div><h1>短剧创作中心</h1><p>{{ workspace.project?.name }} · 项目工作区</p></div>
+      <div><h1>短剧创作中心</h1><p>所属工作区：{{ workspace.project?.name }}<template v-if="workspace.project?.id"> · {{ workspace.project.id }}</template></p></div>
       <div class="headerActions"><el-button @click="emit('returnWorkspace')">返回工作区</el-button><el-button v-if="project" @click="returnToProjects">项目列表</el-button><el-button v-if="project" type="primary" @click="save">保存更改</el-button><el-button v-if="!project && !showCreateForm && !loading" type="primary" @click="showCreateForm = true">新建短剧</el-button></div>
     </header>
     <section v-if="loading" class="loadingState"><el-skeleton :rows="5" animated /></section>
     <section v-else-if="loadError" class="loadingState"><el-alert type="error" :title="loadError" showIcon /><el-button @click="loadProjects">重试读取</el-button></section>
     <section v-else-if="!project && !showCreateForm" class="projectList">
-      <div class="panelHeading"><div><h2>短剧项目</h2><p>{{ workspace.project?.name }} 工作区</p></div><el-button type="primary" @click="showCreateForm = true">新建短剧</el-button></div>
+      <div class="panelHeading"><div><h2>短剧项目（{{ projectEntries.length }}）</h2><p>所属工作区：{{ workspace.project?.name }}。这里显示的是工作区内的子项目，不与首页工作区数量混用。</p></div><el-button type="primary" @click="showCreateForm = true">新建短剧</el-button></div>
       <el-empty v-if="!projects.length" description="当前工作区还没有短剧项目" />
       <div v-else class="projectCards">
-        <button v-for="entry in projectEntries" :key="entry.project.id" type="button" class="projectCard" @click="openProject(entry.project)">
-          <span class="projectCardHeading"><strong>{{ entry.project.name }}</strong><small>最近编辑 {{ formatDate(entry.project.updatedAt) }}</small></span>
-          <span class="projectCardMeta">{{ entry.project.seasons.length }} 季 · {{ entry.project.episodes.length }} 集</span>
-          <span class="projectCardAction">打开项目</span>
-        </button>
+        <article v-for="entry in projectEntries" :key="entry.project.id" class="projectCard">
+          <button type="button" class="projectCardMain" @click="openProject(entry.project)">
+            <span class="projectCardHeading"><strong>{{ entry.project.name }}</strong><small>最近编辑 {{ formatDate(entry.project.updatedAt) }}</small></span>
+            <span class="projectCardMeta">{{ entry.project.seasons.length }} 季 · {{ entry.project.episodes.length }} 集 · {{ entry.storage === 'legacy' ? '旧版兼容存储' : '独立项目目录' }}</span>
+            <span class="projectCardId" :title="entry.project.id">项目 ID · {{ entry.project.id }}</span>
+            <span class="projectCardAction">打开短剧项目</span>
+          </button>
+          <div class="projectCardActions">
+            <el-button link :disabled="busy" @click="renameProject(entry)">重命名</el-button>
+            <el-tooltip :disabled="entry.storage !== 'legacy'" content="旧版项目与共享目录混合存储，需显式迁移后才能安全删除" placement="top">
+              <span><el-button link type="danger" :disabled="busy || entry.storage === 'legacy'" @click="removeProject(entry)">删除</el-button></span>
+            </el-tooltip>
+          </div>
+        </article>
       </div>
     </section>
     <section v-else-if="!project" class="projectSetup">
@@ -130,7 +139,7 @@
         <el-form-item label="人物名称"><el-input v-model="characterDraft.name" /></el-form-item>
         <el-form-item label="人物身份及性格" class="wideFormItem"><el-input v-model="characterDraft.description" type="textarea" :rows="3" /></el-form-item>
         <el-form-item label="人物外貌描述" class="wideFormItem"><el-input v-model="characterDraft.appearance" type="textarea" :rows="4" /></el-form-item>
-        <el-form-item label="人物参考图与 GPT 会员生图" class="wideFormItem"><gptImageGenerator v-model:prompt="characterImagePrompt" v-model:aspectRatio="characterImageRatio" :projectId="project.id" :directory="workspaceDirectory || ''" :referenceOptions="gptReferenceOptions" :initialImagePath="characterDraft.referencePath" initialImageLabel="当前人物参考图" :generatedPersisted="generatedImagePersisted" :saving="imageAssetSaving" @generated="persistCharacterImage" @referencesUploaded="saveCharacterReferences" @useImage="useCharacterImage" /></el-form-item>
+        <el-form-item label="人物参考图与 GPT 会员生图" class="wideFormItem"><gptImageGenerator v-model:prompt="characterImagePrompt" v-model:aspectRatio="characterImageRatio" :projectId="project?.id || ''" :directory="workspaceDirectory || ''" :referenceOptions="gptReferenceOptions" :initialImagePath="characterDraft.referencePath" initialImageLabel="当前人物参考图" :generatedPersisted="generatedImagePersisted" :saving="imageAssetSaving" @generated="persistCharacterImage" @referencesUploaded="saveCharacterReferences" @useImage="useCharacterImage" /></el-form-item>
         <el-collapse><el-collapse-item title="高级信息" name="advanced"><el-form-item label="版本"><el-input-number v-model="characterDraft.version" :min="1" /></el-form-item><el-form-item label="人物 ID"><el-input :modelValue="characterDraft.id" disabled /></el-form-item></el-collapse-item></el-collapse>
       </el-form>
       <template #footer><el-button @click="characterDetailVisible = false">取消</el-button><el-button type="primary" :loading="busy" @click="saveCharacterDetail">保存人物</el-button></template>
@@ -140,7 +149,7 @@
         <el-form-item label="场景名称"><el-input v-model="sceneDraft.heading" /></el-form-item>
         <el-form-item label="场景地点"><el-input v-model="sceneDraft.location" /></el-form-item>
         <el-form-item label="场景环境描述" class="wideFormItem"><el-input v-model="sceneDraft.description" type="textarea" :rows="4" /></el-form-item>
-        <el-form-item label="场景参考图与 GPT 会员生图" class="wideFormItem"><gptImageGenerator v-model:prompt="sceneImagePrompt" v-model:aspectRatio="sceneImageRatio" :projectId="project.id" :directory="workspaceDirectory || ''" :referenceOptions="gptReferenceOptions" :initialImagePath="sceneImageAsset?.referencePath" :initialImageLabel="sceneImageAsset?.name || '当前场景参考图'" :generatedPersisted="generatedImagePersisted" :saving="imageAssetSaving" @generated="persistSceneImage" @referencesUploaded="saveSceneReferences" @useImage="useSceneImage" /></el-form-item>
+        <el-form-item label="场景参考图与 GPT 会员生图" class="wideFormItem"><gptImageGenerator v-model:prompt="sceneImagePrompt" v-model:aspectRatio="sceneImageRatio" :projectId="project?.id || ''" :directory="workspaceDirectory || ''" :referenceOptions="gptReferenceOptions" :initialImagePath="sceneImageAsset?.referencePath" :initialImageLabel="sceneImageAsset?.name || '当前场景参考图'" :generatedPersisted="generatedImagePersisted" :saving="imageAssetSaving" @generated="persistSceneImage" @referencesUploaded="saveSceneReferences" @useImage="useSceneImage" /></el-form-item>
         <el-collapse><el-collapse-item title="高级信息" name="advanced"><div class="formRow"><el-form-item label="时间"><el-input v-model="sceneDraft.time" /></el-form-item><el-form-item label="内景 / 外景"><el-select v-model="sceneDraft.interiorExterior"><el-option label="内景" value="内景" /><el-option label="外景" value="外景" /></el-select></el-form-item><el-form-item label="时段"><el-select v-model="sceneDraft.dayPart"><el-option v-for="item in dayParts" :key="item" :label="item" :value="item" /></el-select></el-form-item></div><el-form-item label="出场人物"><el-input v-model="sceneDraft.charactersText" @change="syncSceneCharacters(sceneDraft)" /></el-form-item><el-form-item label="场景 ID"><el-input :modelValue="sceneDraft.id" disabled /></el-form-item></el-collapse-item></el-collapse>
       </el-form>
       <template #footer><el-button @click="sceneDetailVisible = false">取消</el-button><el-button type="primary" :loading="busy" @click="saveSceneDetail">保存场景</el-button></template>
@@ -152,7 +161,7 @@
         <el-form-item label="景别"><el-input v-model="shotDraft.size" /></el-form-item><el-form-item label="机位"><el-input v-model="shotDraft.angle" /></el-form-item>
         <el-form-item label="画面描述"><el-input v-model="shotDraft.description" type="textarea" :rows="3" /></el-form-item><el-form-item label="人物动作和表情"><el-input v-model="shotDraft.action" type="textarea" :rows="2" /><el-input v-model="shotDraft.expression" /></el-form-item>
         <el-form-item label="台词"><el-input v-model="shotDraft.dialogue" type="textarea" :rows="2" /></el-form-item><el-form-item label="时长（秒）"><el-input-number v-model="shotDraft.duration" :min="1" :max="600" /></el-form-item>
-        <el-form-item label="图片提示词与 GPT 会员生图" class="wideFormItem"><gptImageGenerator v-model:prompt="shotImagePrompt" v-model:aspectRatio="shotImageRatio" :projectId="project.id" :directory="workspaceDirectory || ''" :referenceOptions="gptReferenceOptions" :initialImagePath="shotInitialImagePath" :initialImageLabel="shotInitialImageLabel" :generatedPersisted="generatedImagePersisted" :saving="imageAssetSaving" @generated="persistShotImage" @referencesUploaded="saveShotReferences" @useImage="useShotImage" /></el-form-item>
+        <el-form-item label="图片提示词与 GPT 会员生图" class="wideFormItem"><gptImageGenerator v-model:prompt="shotImagePrompt" v-model:aspectRatio="shotImageRatio" :projectId="project?.id || ''" :directory="workspaceDirectory || ''" :referenceOptions="gptReferenceOptions" :initialImagePath="shotInitialImagePath" :initialImageLabel="shotInitialImageLabel" :generatedPersisted="generatedImagePersisted" :saving="imageAssetSaving" @generated="persistShotImage" @referencesUploaded="saveShotReferences" @useImage="useShotImage" /></el-form-item>
         <el-form-item label="视频提示词" class="wideFormItem"><el-input v-model="shotDraft.videoPrompt" type="textarea" :rows="3" /></el-form-item>
         <el-collapse class="wideFormItem"><el-collapse-item title="高级设置" name="advanced"><el-form-item label="构图"><el-input v-model="shotDraft.composition" /></el-form-item><el-form-item label="运镜"><el-input v-model="shotDraft.movement" /></el-form-item><el-form-item label="音效 / 声音设计"><el-input v-model="shotDraft.sound" type="textarea" :rows="2" /></el-form-item><el-form-item label="首帧素材"><el-select v-model="shotDraft.firstFrameAssetId" clearable><el-option v-for="asset in imageAssets" :key="asset.id" :label="asset.name || asset.id" :value="asset.id" /></el-select></el-form-item><el-form-item label="尾帧素材"><el-select v-model="shotDraft.lastFrameAssetId" clearable><el-option v-for="asset in imageAssets" :key="asset.id" :label="asset.name || asset.id" :value="asset.id" /></el-select></el-form-item><el-form-item label="参考素材"><el-select v-model="shotDraft.referenceAssetIds" multiple clearable><el-option v-for="asset in project?.assets ?? []" :key="asset.id" :label="asset.name || asset.id" :value="asset.id" /></el-select></el-form-item><el-form-item label="旧版参考图路径"><el-input v-model="shotDraft.referencePath" /></el-form-item><div class="formRow"><el-form-item label="制作状态"><el-select v-model="shotDraft.productionStatus"><el-option v-for="item in productionStatuses" :key="item" :label="item" :value="item" /></el-select></el-form-item><el-form-item label="审核状态"><el-select v-model="shotDraft.reviewStatus"><el-option v-for="item in reviewStatuses" :key="item" :label="item" :value="item" /></el-select></el-form-item></div></el-collapse-item></el-collapse>
       </el-form>
@@ -173,7 +182,7 @@ import gptImageGenerator from "@/components/drama/gptImageGenerator.vue";
 import { dramaCharacterDisplayName } from "@/lib/dramaCanvas";
 import dramaStudioNav from "./dramaStudioNav.vue";
 import codexAssistantPane from "./codexAssistantPane.vue";
-import { createDramaProject, createSeason, listDramaProjects, readEpisodeScript, saveDramaProject, saveEpisodeDraft, saveEpisodeScriptVersion, updateScriptReview, type DramaAsset, type DramaCharacter, type DramaEpisode, type DramaProject, type DramaProductionStatus, type DramaScene, type DramaShot, type DramaStatus, type DramaScriptVersion } from "@/lib/dramaWorkspace";
+import { createDramaProject, createSeason, deleteDramaProject, listDramaProjects, notifyDramaProjectChange, readEpisodeScript, renameDramaProject, saveDramaProject, saveEpisodeDraft, saveEpisodeScriptVersion, updateScriptReview, type DramaAsset, type DramaCharacter, type DramaEpisode, type DramaProject, type DramaProjectEntry, type DramaProductionStatus, type DramaScene, type DramaShot, type DramaStatus, type DramaScriptVersion } from "@/lib/dramaWorkspace";
 
 const router = useRouter();
 const props = defineProps<{ initialProjectId?: string; initialEpisodeId?: string; initialSection?: string }>();
@@ -193,8 +202,9 @@ const emit = defineEmits<{
 const workspace = useWorkspaceStore();
 const workspaceDirectory = ref(workspace.project?.directory);
 const project = ref<DramaProject>();
-const projectEntries = ref<{ project: DramaProject; path: string }[]>([]);
+const projectEntries = ref<DramaProjectEntry[]>([]);
 const projects = computed(() => projectEntries.value.map(item => item.project));
+const persistedProjectNames = new Map<string, string>();
 const manifestPath = ref("");
 const loading = ref(true);
 const loadError = ref("");
@@ -359,6 +369,8 @@ async function loadProjects() {
     const entries = await listDramaProjects(useWorkspaceFiles(directory));
     if (directory !== workspaceDirectory.value) return;
     projectEntries.value = entries;
+    persistedProjectNames.clear();
+    entries.forEach(entry => persistedProjectNames.set(entry.project.id, entry.project.name));
     const initialProject = entries.find(item => item.project.id === props.initialProjectId);
     if (initialProject) {
       openProject(initialProject.project);
@@ -387,6 +399,7 @@ function openProject(value: DramaProject) {
 }
 function returnToProjects() {
   project.value = undefined;
+  showCreateForm.value = false;
   manifestPath.value = "";
   scriptText.value = "";
   void loadProjects();
@@ -399,7 +412,6 @@ async function createProject() {
   const files = useWorkspaceFiles(directory);
   busy.value = true;
   try {
-    if (projects.value.some(item => item.name.trim().toLocaleLowerCase() === form.name.trim().toLocaleLowerCase())) throw new Error("当前工作区已有同名短剧项目，请修改项目名称");
     const value = await createDramaProject(files, { ...form, name: form.name.trim() });
     createSeason(value, "第一季", value.targetEpisodes);
     const path = `.toonflow/drama/projects/${value.id}/project.json`;
@@ -407,9 +419,11 @@ async function createProject() {
     if (directory !== workspaceDirectory.value) return;
     project.value = value;
     manifestPath.value = path;
-    projectEntries.value.push({ project: value, path });
+    projectEntries.value.push({ project: value, path, storage: "isolated" });
+    persistedProjectNames.set(value.id, value.name);
     seasonId.value = value.seasons[0]!.id;
     currentEpisodeId.value = value.seasons[0]!.episodes[0]!;
+    notifyDramaProjectChange({ directory, type: "created", projectId: value.id, projectName: value.name });
     ElMessage.success("短剧项目已创建并保存");
   } catch (error) { ElMessage.error(error instanceof Error ? error.message : "创建短剧项目失败"); }
   finally { busy.value = false; }
@@ -423,9 +437,71 @@ async function save() {
   const files = useWorkspaceFiles(directory);
   if (section.value === "storyboard" && viewMode.value === "timeline") timelineSaveState.value = "正在保存";
   busy.value = true;
-  try { await saveDramaProject(files, targetProject, targetPath); if (generatedImageId.value && targetProject.assets.some(item => item.id === generatedImageId.value)) generatedImagePersisted.value = true; if (directory === workspaceDirectory.value) ElMessage.success("项目已保存"); if (section.value === "storyboard" && viewMode.value === "timeline") timelineSaveState.value = "已保存"; return true; }
+  try {
+    const name = targetProject.name.trim();
+    const renamed = persistedProjectNames.get(targetProject.id) !== name;
+    if (renamed) {
+      await renameDramaProject(files, targetProject.id, name);
+      targetProject.name = name;
+      persistedProjectNames.set(targetProject.id, name);
+      notifyDramaProjectChange({ directory, type: "renamed", projectId: targetProject.id, projectName: name });
+    }
+    await saveDramaProject(files, targetProject, targetPath);
+    if (generatedImageId.value && targetProject.assets.some(item => item.id === generatedImageId.value)) generatedImagePersisted.value = true;
+    if (directory === workspaceDirectory.value) ElMessage.success("项目已保存");
+    if (section.value === "storyboard" && viewMode.value === "timeline") timelineSaveState.value = "已保存";
+    return true;
+  }
   catch (error) { ElMessage.error(error instanceof Error ? error.message : "保存失败"); if (section.value === "storyboard" && viewMode.value === "timeline") timelineSaveState.value = "保存失败"; return false; }
   finally { busy.value = false; }
+}
+
+async function renameProject(entry: DramaProjectEntry) {
+  if (busy.value) return;
+  const directory = workspaceDirectory.value;
+  if (!directory) return;
+  const result = await ElMessageBox.prompt("请输入短剧项目名称", "重命名短剧项目", {
+    inputValue: entry.project.name,
+    inputValidator: value => !!value?.trim() && value.trim().length <= 120 || "项目名称必须为 1 至 120 个字符",
+    confirmButtonText: "保存",
+    cancelButtonText: "取消",
+  }).catch(() => null);
+  if (!result) return;
+  busy.value = true;
+  try {
+    const renamed = await renameDramaProject(useWorkspaceFiles(directory), entry.project.id, result.value);
+    if (directory !== workspaceDirectory.value) return;
+    const index = projectEntries.value.findIndex(item => item.project.id === entry.project.id);
+    if (index >= 0) projectEntries.value[index] = renamed;
+    persistedProjectNames.set(renamed.project.id, renamed.project.name);
+    notifyDramaProjectChange({ directory, type: "renamed", projectId: renamed.project.id, projectName: renamed.project.name });
+    ElMessage.success("短剧项目已重命名");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "重命名短剧项目失败");
+  } finally { busy.value = false; }
+}
+
+async function removeProject(entry: DramaProjectEntry) {
+  if (busy.value || entry.storage === "legacy") return;
+  const directory = workspaceDirectory.value;
+  if (!directory) return;
+  const confirmed = await ElMessageBox.confirm(
+    `确定删除短剧项目“${entry.project.name}”吗？将检查并仅删除项目 ID ${entry.project.id} 的独立目录；发现共享素材、原生画布或旧版目录时会拒绝删除。`,
+    "删除短剧项目",
+    { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" },
+  ).then(() => true, () => false);
+  if (!confirmed) return;
+  busy.value = true;
+  try {
+    await deleteDramaProject(useWorkspaceFiles(directory), entry.project.id);
+    if (directory !== workspaceDirectory.value) return;
+    projectEntries.value = projectEntries.value.filter(item => item.project.id !== entry.project.id);
+    persistedProjectNames.delete(entry.project.id);
+    notifyDramaProjectChange({ directory, type: "deleted", projectId: entry.project.id, projectName: entry.project.name });
+    ElMessage.success("短剧项目已删除");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "删除短剧项目失败");
+  } finally { busy.value = false; }
 }
 async function loadEpisodeScript(episodeId: string) {
   const directory = workspaceDirectory.value;
@@ -958,10 +1034,38 @@ function formatDate(value: string) { return new Date(value).toLocaleString("zh-C
 .projectSetup { width: min(720px, calc(100% - 40px)); margin: 56px auto; padding: 28px; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; background: var(--el-bg-color); h2 { margin: 0 0 24px; font-size: 18px; } }
 .projectList { width: min(900px, calc(100% - 48px)); margin: 32px auto; padding: 24px; border: 1px solid var(--el-border-color-lighter); border-radius: 7px; background: var(--el-bg-color); }
 .projectCards { display: grid; gap: 10px; }
-.projectCard { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; width: 100%; padding: 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; color: var(--el-text-color-primary); background: var(--el-bg-color); text-align: left; cursor: pointer; &:hover { border-color: var(--el-color-primary-light-5); background: var(--el-fill-color-light); } }
+.projectCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-bg-color);
+  overflow: hidden;
+
+  &:hover { border-color: var(--el-color-primary-light-5); background: var(--el-fill-color-light); }
+
+  .projectCardMain {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 16px;
+    width: 100%;
+    padding: 16px;
+    border: 0;
+    color: var(--el-text-color-primary);
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+
+    &:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: -2px; }
+  }
+
+  .projectCardActions { display: flex; align-items: center; gap: 4px; padding-right: 12px; }
+}
 .projectCardHeading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; strong { font-size: 15px; } small, .projectCardMeta { color: var(--el-text-color-secondary); font-size: 12px; } }
-.projectCardMeta { color: var(--el-text-color-secondary); font-size: 12px; }
-.projectCardAction { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--el-color-primary); font-size: 13px; }
+.projectCardMeta, .projectCardId { overflow: hidden; color: var(--el-text-color-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.projectCardAction { grid-column: 2; grid-row: 1 / span 3; align-self: center; color: var(--el-color-primary); font-size: 13px; }
 .loadingState { width: min(900px, calc(100% - 48px)); margin: 48px auto; display: grid; gap: 18px; }
 .formRow { display: flex; gap: 16px; > * { flex: 1; } }
 .workspaceTopbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 46px; padding: 6px 16px; border-bottom: 1px solid var(--el-border-color-lighter); background: var(--el-bg-color); > div:first-child { display: flex; align-items: baseline; gap: 12px; min-width: 0; strong { color: var(--el-text-color-primary); font-size: 14px; } span { overflow: hidden; color: var(--el-text-color-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; } } }

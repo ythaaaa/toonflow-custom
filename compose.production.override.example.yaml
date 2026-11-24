@@ -1,0 +1,3 @@
+services:
+  toonflow:
+    image: toonflow-m4606:0.1.0-m4.7.3

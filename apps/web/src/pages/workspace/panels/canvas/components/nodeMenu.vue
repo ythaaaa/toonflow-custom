@@ -71,9 +71,7 @@
           <el-dropdown-item v-else disabled>添加节点</el-dropdown-item>
           <template v-if="dramaContext">
             <el-divider />
-            <el-dropdown-item command="drama:character" :disabled="!createDramaNode">添加人物</el-dropdown-item>
-            <el-dropdown-item command="drama:scene" :disabled="!createDramaNode">添加场景</el-dropdown-item>
-            <el-dropdown-item command="drama:shot" :disabled="!createDramaNode">添加分镜镜头</el-dropdown-item>
+            <el-dropdown-item command="drama:import" :disabled="!importDramaScript">导入剧本并 AI 分析</el-dropdown-item>
           </template>
           <el-dropdown-item v-if="!menuItems.length && !dramaContext" disabled>{{ pendingHandle || pendingGroup.length ? "没有可连接的节点" : "没有可显示的节点" }}</el-dropdown-item>
           <nodeMenuItems
@@ -123,7 +121,7 @@ import {
 } from "@tabler/icons-vue";
 
 const { remoteNodes = [], disabled = false, pasteNode, uploadFiles, canUndo = false, canRedo = false, selectionBusy = false, batchHistory,
-  dramaContext = false, createDramaNode, archiveDramaNode } = defineProps<{
+  dramaContext = false, importDramaScript, archiveDramaNode } = defineProps<{
   remoteNodes?: { type: string; label: string }[];
   disabled?: boolean;
   pasteNode?: (position: { x: number; y: number }) => Promise<boolean>;
@@ -133,7 +131,7 @@ const { remoteNodes = [], disabled = false, pasteNode, uploadFiles, canUndo = fa
   selectionBusy?: boolean;
   batchHistory?: (action: () => Promise<void>) => Promise<void>;
   dramaContext?: boolean;
-  createDramaNode?: (kind: "character" | "scene" | "shot", position: { x: number; y: number }) => Promise<void>;
+  importDramaScript?: () => void;
   archiveDramaNode?: (node: GraphNode) => Promise<void>;
 }>();
 const emit = defineEmits<{ history: []; undo: []; redo: []; duplicateSelection: [] }>();
@@ -313,12 +311,10 @@ async function handleCommand(command: unknown) {
     uploadFiles?.({ ...nodePosition });
     return;
   }
-  if (typeof command === "string" && command.startsWith("drama:")) {
-    const kind = command.slice("drama:".length);
-    if (!dramaContext || !createDramaNode || !["character", "scene", "shot"].includes(kind)) return;
+  if (command === "drama:import") {
+    if (!dramaContext || !importDramaScript) return;
     menu.value?.handleClose();
-    try { await createDramaNode(kind as "character" | "scene" | "shot", { ...nodePosition }); }
-    catch (error) { ElMessage.error(error instanceof Error ? error.message : "创建短剧节点失败"); }
+    importDramaScript();
     return;
   }
   if (command === "undo" || command === "redo") {

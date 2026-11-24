@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { dirname, join, relative } from "node:path";
-import { lstat, mkdir, readFile, realpath, writeAtomic } from "@toonflow/file";
+import { lstat, mkdir, readFile, readdir, realpath, writeAtomic } from "@toonflow/file";
 import type { ProviderTaskData } from "@toonflow/providers";
 import type { GeneratedMedia, MediaGenerationRequest } from "@toonflow/tools-scaffold/runtime";
 import type { AuthIdentity } from "@toonflow/multi-tenant-auth";
@@ -11,6 +11,7 @@ import { error, errorFromCause, success } from "@/lib/responseFormat";
 import conf from "@/utils/conf";
 import { generateMedia, isMediaNotSubmitted, type MediaGenerationCheckpoint } from "@/utils/media/generation";
 import { lockWorkspaceFiles, resolveWorkspacePath } from "@/utils/workspace/files";
+import { assertWorkspaceAvailable } from "@/utils/workspace";
 import { modelGateway } from "@/utils/multiTenant/gateway";
 import { readPriceReference } from "@/utils/media/priceReference";
 
@@ -99,6 +100,26 @@ function identity(value: string) { return process.platform === "win32" ? value.t
 function taskPath(cwd: string, taskId: string) {
   z.uuid().parse(taskId);
   return join(dirname(conf.path), "mediaTasks", `workspace${createHash("sha256").update(identity(cwd)).digest("hex")}`, `task${taskId.replaceAll("-", "").toLowerCase()}.json`);
+}
+
+export async function hasActiveTasks(cwd: string) {
+  cwd = await realpath(cwd);
+  const workspaceIdentity = identity(cwd);
+  if ([...tasks.values()].some(task => identity(task.record.cwd) === workspaceIdentity
+    && (task.active || task.record.state === "running"))) return true;
+  const directory = dirname(taskPath(cwd, crypto.randomUUID()));
+  if (!await privateDirectory(directory, false)) return false;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !/^task[a-f0-9]{32}\.json$/.test(entry.name)) continue;
+    const path = join(directory, entry.name);
+    const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink()) return true;
+    try {
+      const record = JSON.parse((await readPrivateFile(path, maxRecordSize)).toString("utf8")) as Partial<TaskRecord>;
+      if (typeof record.cwd === "string" && identity(record.cwd) === workspaceIdentity && record.state === "running") return true;
+    } catch { return true; }
+  }
+  return false;
 }
 function serialize(value: unknown) {
   return JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
@@ -458,6 +479,7 @@ export async function start(cwd: string, taskId: string, mediaType: "image" | "v
   attachment: TaskOwner = {}, owner?: AuthIdentity | null) {
   requireOwner(owner);
   cwd = await realpath(cwd);
+  assertWorkspaceAvailable(cwd);
   const key = taskPath(cwd, taskId);
   const parsed = requestSchemas[mediaType].parse(request);
   if (attachment.nodeId !== undefined) z.string().min(1).max(512).parse(attachment.nodeId);

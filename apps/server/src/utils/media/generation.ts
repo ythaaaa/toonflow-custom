@@ -8,6 +8,7 @@ import conf from "@/utils/conf";
 import { getAccountProvider } from "@/utils/ai/provider";
 import { getMediaProvider, listMediaProviders, loadMediaProviderSource } from "@/utils/media/provider";
 import { lockWorkspaceFiles, resolveWorkspacePath, writeWorkspaceFile } from "@/utils/workspace/files";
+import { registerWorkspaceGeneration } from "@/utils/workspace";
 import { beginGeneration, getProviderPrice } from "@/utils/media/billing";
 import { detectMimeType, readPriceReference } from "@/utils/media/priceReference";
 import { modelGateway } from "@/utils/multiTenant/gateway";
@@ -247,18 +248,21 @@ export async function generateMedia(
   signal?: AbortSignal,
   task?: MediaGenerationTask,
 ): Promise<GeneratedMedia[]> {
-  requireGenerationMode(task);
-  const checkpoint = task?.checkpoint;
-  let submitted = task?.resume === true || !!checkpoint?.providerData || checkpoint?.assetCount !== undefined || !!checkpoint?.files?.length;
+  const release = registerWorkspaceGeneration(cwd);
   try {
-    return await executeMedia(cwd, mediaType, request, signal, task, () => { submitted = true; });
-  } catch (cause) {
-    // ACT: 仅宿主确认尚未调用供应商的异常证明未提交；供应商错误码不能伪造此证据。
-    if (!task?.modelRouteCipher || submitted) throw cause;
-    const failure = cause instanceof Error ? cause : new Error(String(cause));
-    notSubmittedFailures.add(failure);
-    throw failure;
-  }
+    requireGenerationMode(task);
+    const checkpoint = task?.checkpoint;
+    let submitted = task?.resume === true || !!checkpoint?.providerData || checkpoint?.assetCount !== undefined || !!checkpoint?.files?.length;
+    try {
+      return await executeMedia(cwd, mediaType, request, signal, task, () => { submitted = true; });
+    } catch (cause) {
+      // ACT: 仅宿主确认尚未调用供应商的异常证明未提交；供应商错误码不能伪造此证据。
+      if (!task?.modelRouteCipher || submitted) throw cause;
+      const failure = cause instanceof Error ? cause : new Error(String(cause));
+      notSubmittedFailures.add(failure);
+      throw failure;
+    }
+  } finally { release(); }
 }
 
 async function executeMedia(

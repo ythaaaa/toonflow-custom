@@ -4,14 +4,15 @@
       <projectCover :directory="project.directory" />
       <span class="projectInfo">
         <span class="projectName" :title="project.name">{{ project.name }}</span>
-        <span class="projectTime">最近打开 {{ new Date(project.lastOpenedAt).toLocaleString(locale, { hour12: false }) }}</span>
+        <span class="projectTime">{{ project.lastOpenedAt ? `最近打开 ${new Date(project.lastOpenedAt).toLocaleString(locale, { hour12: false })}` : '服务器工作区 · 尚未打开' }}</span>
+        <span class="projectId" :title="project.id">工作区 ID · {{ project.id }}</span>
       </span>
     </button>
     <el-dropdown v-if="$slots.actions" class="projectActions" :class="{ actionsVisible: menuVisible || actionsLoading }" trigger="click" placement="bottom-end" :showArrow="false" :disabled="disabled" @visibleChange="menuVisible = $event">
       <el-button class="projectMenuButton" text :icon="IconDotsVertical" :loading="actionsLoading" :disabled="disabled" aria-label="更多操作" title="更多操作" />
       <template #dropdown>
         <el-dropdown-menu class="projectActionMenu" :aria-label="project.name">
-          <el-dropdown-item :icon="IconFolderOpen" :disabled="disabled" @click="emit('select')">打开</el-dropdown-item>
+          <el-dropdown-item :icon="IconFolderOpen" :disabled="disabled" @click="emit('select')">打开工作区</el-dropdown-item>
           <slot name="actions" />
         </el-dropdown-menu>
       </template>
@@ -31,7 +32,7 @@ withDefaults(defineProps<{
   disabled?: boolean;
   actionLabel?: string;
   actionsLoading?: boolean;
-}>(), { actionLabel: "打开项目" });
+}>(), { actionLabel: "打开工作区" });
 const emit = defineEmits<{ select: [] }>();
 const menuVisible = ref(false);
 </script>
@@ -84,7 +85,7 @@ const menuVisible = ref(false);
         line-height: 1.5;
       }
 
-      .projectTime { font-size: 12px; line-height: 1.6; color: var(--el-text-color-secondary); }
+      .projectTime, .projectId { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 1.6; color: var(--el-text-color-secondary); }
     }
   }
 

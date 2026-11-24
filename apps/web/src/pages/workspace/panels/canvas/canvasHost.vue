@@ -214,6 +214,9 @@ function resolveCanvasContext(fileName: string): CanvasContext | undefined {
 function getCanvasContext() {
   return props.active ? activeInstance.value?.getCanvasContext() : undefined;
 }
+function getAgentContextSnapshot() {
+  return props.active ? activeInstance.value?.getAgentContextSnapshot() : undefined;
+}
 
 async function flushSave(action?: () => Promise<void>) {
   const panels = entries.value.map(entry => instances.get(entry.key)).filter((panel): panel is CanvasInstance => !!panel);
@@ -474,7 +477,7 @@ const mentionSource: MentionCanvasSource = {
   },
 };
 
-defineExpose({ canvasId, canvasReady, canvasListReady, getCanvasContext, readDocumentNode, readDocumentNodes, focusDocumentNode, saveDocumentNode, mountDocumentNode, observeDocumentNode, resolveDocumentNodeFile, performFileAction, flushSave, cancelSave,
+defineExpose({ canvasId, canvasReady, canvasListReady, getCanvasContext, getAgentContextSnapshot, readDocumentNode, readDocumentNodes, focusDocumentNode, saveDocumentNode, mountDocumentNode, observeDocumentNode, resolveDocumentNodeFile, performFileAction, flushSave, cancelSave,
   openDramaCanvas,
   addNodeAtPointer: () => activeInstance.value?.addNodeAtPointer(),
   openNodeSearch: () => activeInstance.value?.openNodeSearch(),

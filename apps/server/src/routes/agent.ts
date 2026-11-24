@@ -2,11 +2,13 @@ import { Router } from "express";
 import { z } from "zod";
 import type { CanvasInfo } from "@toonflow/tools-scaffold/runtime";
 import type { AgentEvent } from "@/agent/runtime/types";
+import type { AgentCanvasSnapshot } from "@/agent/runtime/types";
 import { validateFields } from "@/lib/middleware";
 import u from "@/utils";
 import { translateError, translateMessage } from "@/lib/i18n";
 import { thinkingLevels } from "@/lib/modelReasoning";
 import { getAgentModelConfiguration } from "@/agent/runtime/model";
+import { freezeDramaContext } from "@/agent/runtime/dramaContext";
 
 const inputSchema = z.object({
   prompt: z.string().trim(), directory: z.string().min(1),
@@ -29,6 +31,18 @@ const inputSchema = z.object({
       description: z.string().max(4000),
       parameters: z.record(z.string(), z.json()).refine(value => value.type === "object", "函数参数必须是 object JSON Schema"),
     })).max(1000),
+    snapshot: z.strictObject({
+      directory: z.string().min(1), canvasId: z.string().min(1).max(256),
+      projectId: z.string().nullable(), projectName: z.string().nullable(),
+      episodeId: z.string().nullable(), episodeName: z.string().nullable(),
+      selectedNodeIds: z.array(z.string().max(256)).max(20),
+      nodes: z.array(z.strictObject({
+        id: z.string().max(256), type: z.string(), label: z.string().max(200),
+        business: z.json(), data: z.json(), shot: z.json(), scene: z.json(),
+        characters: z.array(z.json()).max(30), assets: z.array(z.json()).max(30),
+      })).max(20),
+      relations: z.array(z.strictObject({ source: z.string(), target: z.string(), relation: z.json() })).max(100),
+    }).refine(value => JSON.stringify(value).length <= 65536, "画布上下文最多 64 KiB").optional(),
   }).optional(),
 });
 
@@ -56,6 +70,10 @@ export default Router().post("/", validateFields(inputSchema.shape), async (req,
     const run = { runId, directory: workspace.then(cwd => cwd, () => undefined), abort: stop, finished: finished.promise };
     unregister = u.agent.registerAgentRun(run);
     const cwd = await workspace;
+    u.workspace.assertWorkspaceAvailable(cwd);
+    if (canvas?.snapshot && (canvas.snapshot.directory.toLowerCase() !== cwd.toLowerCase() || canvas.snapshot.canvasId !== canvas.id)) {
+      throw Object.assign(new Error("画布上下文与当前工作目录或画布不一致"), { status: 400 });
+    }
     controller.signal.throwIfAborted();
     await getAgentModelConfiguration(options.providerId, options.modelId, options.thinkingLevel);
     res.set({ "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" });
@@ -71,7 +89,8 @@ export default Router().post("/", validateFields(inputSchema.shape), async (req,
     heartbeat = setInterval(() => {
       if (!res.destroyed && !res.writableEnded && !res.writableNeedDrain) res.write("\n");
     }, 20000);
-    await u.agent.run({ ...options, runId, cwd, canvas: bridge?.context, question: questions.context, signal: controller.signal, onCancel: stop }, send);
+    const canvasSnapshot = canvas?.snapshot ? await freezeDramaContext(cwd, canvas.snapshot as AgentCanvasSnapshot) : undefined;
+    await u.agent.run({ ...options, runId, cwd, canvas: bridge?.context, canvasSnapshot, question: questions.context, signal: controller.signal, onCancel: stop }, send);
     send({ type: "done" });
   } catch (error) {
     if (!res.headersSent) throw error;

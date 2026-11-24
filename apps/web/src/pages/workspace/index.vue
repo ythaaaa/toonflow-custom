@@ -151,7 +151,7 @@ import settings from "@/components/settings/index.vue";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { registerWorkspaceControl, waitForControlValue } from "@/lib/mcpControl";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
-import { listDramaProjects } from "@/lib/dramaWorkspace";
+import { listDramaProjects, registerDramaProjectChanges } from "@/lib/dramaWorkspace";
 import anonymousData from "@/lib/anonymousData";
 import { useProviderBalances } from "@/lib/providerBilling";
 import canvasPanel from "./panels/canvas/canvasHost.vue";
@@ -190,6 +190,24 @@ onScopeDispose(() => {
   for (const eventName of sideButtonEvents) window.removeEventListener(eventName, preventSideButtonNavigation, true);
 });
 const workspaceStore = useWorkspaceStore();
+onScopeDispose(registerDramaProjectChanges(change => {
+  const context = dramaCanvasContext.value;
+  if (!context || context.projectId !== change.projectId || workspaceStore.project?.directory !== change.directory) return;
+  if (change.type === "deleted") {
+    dramaCanvasContext.value = undefined;
+    try { localStorage.removeItem("toonflow.lastDramaCanvas"); } catch {}
+    return;
+  }
+  if (change.type === "renamed" && change.projectName) {
+    dramaCanvasContext.value = { ...context, projectName: change.projectName };
+    try {
+      const stored = JSON.parse(localStorage.getItem("toonflow.lastDramaCanvas") || "{}") as { directory?: string; projectId?: string; navigation?: DramaCanvasNavigation };
+      if (stored.directory === change.directory && stored.projectId === change.projectId && stored.navigation) {
+        localStorage.setItem("toonflow.lastDramaCanvas", JSON.stringify({ ...stored, navigation: { ...stored.navigation, projectName: change.projectName } }));
+      }
+    } catch {}
+  }
+}));
 useProviderBalances();
 const panelOptions = [
   { label: "画布", value: "canvas", icon: IconVector },
@@ -299,6 +317,7 @@ function setDocumentPanel(value: Element | ComponentPublicInstance | null) {
   if (value && directory) documentPanelCache.value = { directory, instance: value as InstanceType<typeof documentPanel> };
 }
 provide("canvas", () => canvasPanelRef.value?.getCanvasContext());
+provide("agentCanvasSnapshot", () => canvasPanelRef.value?.getAgentContextSnapshot());
 provide("mentionCanvas", () => canvasPanelRef.value?.mentionSource);
 provide("activateCanvasPanel", () => switchPanel("canvas"));
 provide("performWorkspaceFileAction", (directory: string, action: "copy" | "rename" | "move" | "delete", path: string, target?: string, entryType: "canvas" | "directory" = "canvas") =>

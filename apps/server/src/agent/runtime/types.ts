@@ -20,6 +20,18 @@ export type AgentStats = {
 
 export type AgentContext = { tokens: number | null; contextWindow: number; percent: number | null };
 
+export type AgentCanvasSnapshot = {
+  directory: string;
+  canvasId: string;
+  projectId: string | null;
+  projectName: string | null;
+  episodeId: string | null;
+  episodeName: string | null;
+  selectedNodeIds: string[];
+  nodes: { id: string; type: string; label: string; business: unknown; data: unknown; shot: unknown; scene: unknown; characters: unknown[]; assets: unknown[] }[];
+  relations: { source: string; target: string; relation: unknown }[];
+};
+
 export type AgentQueuedMessage = { id: string; content: string };
 export type AgentMessageDelivery = { mode: "steer" | "followUp"; taskMessageId: string };
 export type AgentQueue = {

@@ -5,6 +5,42 @@ import conf from "@/utils/conf";
 import { getMobileLinkConfig, isMobileLinkRequest } from "@/utils/mobileLink";
 import { getRuntimePlatform } from "@/lib/platform";
 
+const deletingWorkspaces = new Set<string>();
+const workspaceGenerations = new Map<string, number>();
+
+function workspaceIdentity(path: string) {
+  const resolved = resolve(path);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+export function assertWorkspaceAvailable(directory: string) {
+  if (deletingWorkspaces.has(workspaceIdentity(directory))) {
+    throw Object.assign(new Error("工作区正在删除，暂时不能启动新任务"), { status: 409, code: "EWORKSPACEDELETING" });
+  }
+}
+
+export function lockWorkspaceDeletion(directory: string) {
+  const key = workspaceIdentity(directory);
+  if (deletingWorkspaces.has(key)) throw Object.assign(new Error("工作区正在删除，请稍后重试"), { status: 409, code: "EWORKSPACEDELETING" });
+  deletingWorkspaces.add(key);
+  return () => deletingWorkspaces.delete(key);
+}
+
+export function registerWorkspaceGeneration(directory: string) {
+  assertWorkspaceAvailable(directory);
+  const key = workspaceIdentity(directory);
+  workspaceGenerations.set(key, (workspaceGenerations.get(key) ?? 0) + 1);
+  return () => {
+    const count = workspaceGenerations.get(key) ?? 0;
+    if (count <= 1) workspaceGenerations.delete(key);
+    else workspaceGenerations.set(key, count - 1);
+  };
+}
+
+export function hasActiveWorkspaceGeneration(directory: string) {
+  return (workspaceGenerations.get(workspaceIdentity(directory)) ?? 0) > 0;
+}
+
 export function isLocalHostRequest(req: Request) {
   if (isMobileLinkRequest(req) || req.res?.locals.multiTenantWeb || req.res?.locals.multiTenantUser?.role === "user") return false;
   if (conf.get("settings", {}).multiTenantEnabled === true && req.res?.locals.multiTenantUser?.role !== "admin") return false;

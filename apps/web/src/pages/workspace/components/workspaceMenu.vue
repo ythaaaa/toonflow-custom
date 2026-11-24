@@ -2,7 +2,7 @@
   <div class="workspaceMenu">
     <el-card shadow="never" :bodyStyle="{ padding: '2px 4px' }">
       <div class="menuContent">
-        <el-button class="toolButton" text aria-label="退出项目" title="退出项目" @click="exitVisible = true">
+        <el-button class="toolButton" text aria-label="退出工作区" title="退出工作区" @click="exitVisible = true">
           <icon-logout :size="18" aria-hidden="true" />
         </el-button>
         <el-button class="toolButton" text aria-label="短剧创作中心" title="短剧创作中心" @click="emit('openDrama')">剧</el-button>
@@ -13,11 +13,11 @@
         </el-button>
       </div>
     </el-card>
-    <el-dialog v-model="exitVisible" title="退出项目" width="360px" alignCenter appendToBody>
-      <span>是否退出当前项目并返回首页？</span>
+    <el-dialog v-model="exitVisible" title="退出工作区" width="360px" alignCenter appendToBody>
+      <span>是否退出当前工作区并返回首页？</span>
       <template #footer>
         <el-button @click="exitVisible = false">取消</el-button>
-        <el-button type="primary" :loading="leaving" @click="exitProject">退出项目</el-button>
+        <el-button type="primary" :loading="leaving" @click="exitProject">退出工作区</el-button>
       </template>
     </el-dialog>
   </div>

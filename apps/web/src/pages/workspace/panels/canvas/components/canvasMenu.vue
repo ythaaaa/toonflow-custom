@@ -2,7 +2,7 @@
   <panel class="canvasMenuPanel" position="top-left">
     <el-card class="canvasMenu" shadow="never" :bodyStyle="{ padding: '2px 4px' }">
       <div class="menuContent">
-        <el-input v-model="projectNameDraft" class="workspaceNameInput" :style="{ '--workspaceName': JSON.stringify(projectNameDraft || ' ') }" size="small" :title="directory" :disabled="!workspaceStore.project" aria-label="项目名称"
+        <el-input v-model="projectNameDraft" class="workspaceNameInput" :style="{ '--workspaceName': JSON.stringify(projectNameDraft || ' ') }" size="small" :title="directory" :disabled="!workspaceStore.project" aria-label="工作区名称"
           @keydown.stop @keydown.enter="saveProjectName" @keydown.esc.prevent="projectNameDraft = workspaceName" @blur="saveProjectName" />
         <el-divider direction="vertical" />
         <el-popover v-model:visible="canvasListVisible" trigger="click" placement="bottom-start" :width="320" :showArrow="false" :disabled="!directory">
@@ -100,7 +100,7 @@ watch([() => workspaceStore.project?.directory, workspaceName], () => {
 function saveProjectName(event: Event) {
   if (event instanceof KeyboardEvent && event.isComposing) return;
   const project = workspaceStore.project;
-  if (project) workspaceStore.renameProject(project.directory, projectNameDraft.value);
+  if (project) workspaceStore.renameProject(project.id, projectNameDraft.value);
   projectNameDraft.value = workspaceName.value;
 }
 

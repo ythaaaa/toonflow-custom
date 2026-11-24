@@ -7,10 +7,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { CanvasContext, QuestionContext } from "@toonflow/tools-scaffold/runtime";
-import type { AgentEvent, AgentMention, AgentPeerMessage, AgentToolCall } from "@/agent/runtime/types";
+import type { AgentCanvasSnapshot, AgentEvent, AgentMention, AgentPeerMessage, AgentToolCall } from "@/agent/runtime/types";
 import { agentMentionsSchema, mentionPrompt, snapshotMentions, validateMentionTokens } from "@/agent/runtime/mentions";
 import { readAiReferences, referenceContent } from "@/utils/ai";
 import { createAgentTools } from "@/agent/tools";
+import { createDramaContextTool } from "@/agent/tools/dramaContext";
 import { createAgentResources } from "@/agent/runtime/resources";
 import { createAgentModel, getAgentModelConfiguration } from "@/agent/runtime/model";
 import { configureAgentRequests } from "@/agent/runtime/requests";
@@ -46,6 +47,7 @@ type AgentOptions = {
   resendFrom?: string;
   streamingBehavior?: "steer" | "followUp";
   canvas?: CanvasContext;
+  canvasSnapshot?: AgentCanvasSnapshot;
   question?: QuestionContext;
   signal?: AbortSignal;
   onCancel?: () => void;
@@ -67,6 +69,7 @@ export async function run(
     resendFrom,
     streamingBehavior,
     canvas,
+    canvasSnapshot,
     question,
     signal,
     onCancel,
@@ -150,6 +153,9 @@ export async function run(
   try {
     signal.throwIfAborted();
     const history = newHistory ?? SessionManager.open(sessionPath!, sessionsDir, cwd);
+    const canvasReadOnly = history.getEntries().some(entry => entry.type === "custom" && entry.customType === "toonflowCanvasReadOnly");
+    if (canvasReadOnly && !canvas) throw Object.assign(new Error("画布只读对话必须保留画布上下文"), { status: 403 });
+    if (canvas && !canvasReadOnly) history.appendCustomEntry("toonflowCanvasReadOnly", { enabled: true });
     const file = basename(history.getSessionFile()!);
     const parentFile = getParentSessionFile(history);
     const child = getSubAgentInfo(history)?.data;
@@ -171,7 +177,7 @@ export async function run(
     };
     unregister = registerAgentSession(history.getSessionFile()!, active);
     if (!runId) unregisterRun = registerAgentRun({ runId: active.runId, directory: Promise.resolve(cwd), abort: active.abort, finished: finished.promise });
-    const tools = await createAgentTools(cwd, canvas, question);
+    const tools = await createAgentTools(cwd, canvas, question, true, canvasSnapshot);
     if (isMemoryEnabled()) {
       const memoryTool = createMemoryTool();
       if (tools.some(tool => tool.name === memoryTool.name)) throw new Error("工具名称 memory 已被内置全局记忆工具占用");
@@ -204,6 +210,13 @@ export async function run(
         onCanvasCancel: reason => { controller.abort(reason); onCanvasCancel?.(reason); },
       }),
     }));
+    if (canvas) {
+      const allowed = new Set(["getCanvas", "findCanvasNodes", "getCanvasNodes", "getCanvasEdges", "getDramaContext"]);
+      for (let index = tools.length - 1; index >= 0; index--) {
+        if (!allowed.has(tools[index]!.name)) tools.splice(index, 1);
+      }
+      if (canvasSnapshot) tools.push(createDramaContextTool(canvasSnapshot));
+    }
     const resources = await createAgentResources(cwd, tools, undefined, child
       ? `## 子 Agent 职责\n你正在执行委派任务：${JSON.stringify({ file, name: child.name, task: child.task })}。遵守当前工作区规则与授权，用户可以进入此子会话补充要求。需要其他 Agent 配合时使用 listAgents 与 sendAgentMessage 直接沟通。重要进展与最终结论使用 report 上报父 Agent。`
       : "");

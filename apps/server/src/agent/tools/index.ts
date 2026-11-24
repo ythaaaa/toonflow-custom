@@ -13,6 +13,7 @@ import {
   detectSupportedImageMimeTypeFromFile, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { CanvasContext, QuestionContext, ToolContext, ToolFiles, MediaGenerationRequest } from "@toonflow/tools-scaffold/runtime";
+import type { AgentCanvasSnapshot } from "@/agent/runtime/types";
 import { asrRequestSchema } from "@toonflow/tools-scaffold/runtime";
 import conf from "@/utils/conf";
 import { isWithin, resolveWorkspacePath, writeWorkspaceFile, renameWorkspaceFile, removeWorkspaceFile, lockWorkspaceFiles, protectWorkspaceRoot } from "@/utils/workspace/files";
@@ -168,7 +169,32 @@ export function createAgentToolContext(cwd: string, config: Record<string, unkno
   };
 }
 
-export async function createAgentTools(cwd: string, canvas?: CanvasContext, question?: QuestionContext, includeMcp = true): Promise<ToolDefinition[]> {
+export async function createAgentTools(cwd: string, canvas?: CanvasContext, question?: QuestionContext, includeMcp = true, snapshot?: AgentCanvasSnapshot): Promise<ToolDefinition[]> {
+  if (canvas) {
+    // M4.7.1 画布对话只暴露读取入口。这里在工具注册层截断 Workspace、媒体、节点函数和 MCP 写入能力。
+    const allowed = new Set(["getCanvas", "findCanvasNodes", "getCanvasNodes", "getCanvasEdges"]);
+    const { plugin } = await loadTool("canvas");
+    const context = createAgentToolContext(cwd, {}, canvas, question);
+    return (await plugin.createTools(context)).filter(tool => allowed.has(tool.name)).map(tool => ({
+      ...tool,
+      async execute(...args: Parameters<typeof tool.execute>) {
+        if (snapshot && tool.name === "findCanvasNodes") {
+          const query = canvasSchemas.findCanvasNodes.parse(args[1]);
+          if (query.selectedOnly) {
+            const offset = query.cursor ? Number(query.cursor) : 0;
+            if (!Number.isInteger(offset) || offset < 0 || offset > snapshot.nodes.length) throw new Error("选中节点快照游标无效");
+            const nodes = snapshot.nodes.slice(offset, offset + query.limit).map(node => ({ id: node.id, type: node.type, label: node.label, selected: true }));
+            const next = offset + nodes.length;
+            const details = { canvasId: snapshot.canvasId, nodes, scanned: nodes.length, totalNodes: null, selectedNodeCount: snapshot.nodes.length, hasMore: next < snapshot.nodes.length, nextCursor: next < snapshot.nodes.length ? String(next) : null };
+            return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+          }
+          if (!query.query && !query.types?.length) throw new Error("画布上下文仅允许查询选中节点或明确指定的节点");
+        }
+        if (snapshot && tool.name === "getCanvasEdges" && !canvasSchemas.getCanvasEdges.parse(args[1]).nodeIds?.length) throw new Error("请指定局部节点 ID，不读取全画布连线");
+        return tool.execute(...args);
+      },
+    }));
+  }
   const tools = createPluginMarketTools(question);
   const names = new Set(tools.map(tool => tool.name));
   const context = createAgentToolContext(cwd, {}, canvas, question);

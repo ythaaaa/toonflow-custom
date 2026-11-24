@@ -1,5 +1,5 @@
 <template>
-  <div class="home" :class="{ sidebarCollapsed }" :inert="creating || opening || workspaceStore.projectLoadingVisible">
+  <div class="home" :class="{ sidebarCollapsed }" :inert="creating || opening || !!deletingWorkspaceId || workspaceStore.projectLoadingVisible">
     <bg class="pageBackground" :scrollTop="backgroundScrollTop" />
     <homeAdvertisementCarousel class="topPromotion" :advertisements="advertisements.banners" placement="banner" :mode="advertisements.bannerMode" :interval="advertisements.bannerInterval" @activate="activateAdvertisement" />
     <aside id="homeSidebar" class="homeSidebar" aria-label="首页侧栏">
@@ -49,7 +49,7 @@
     <el-scrollbar ref="pageScroll" class="pageScroll" @scroll="updateActiveSection">
       <div class="pageBody">
         <el-main class="pageContent">
-          <section class="creationPanel" data-home-section="home" aria-label="创建项目">
+          <section class="creationPanel" data-home-section="home" aria-label="创建工作区">
             <div class="brand">
               <el-image class="brandLogo" :src="logoUrl" fit="contain" alt="Toonflow" />
               <h1>今天要做点什么？</h1>
@@ -84,27 +84,27 @@
           </section>
           <section class="projectList" data-home-section="projects" aria-labelledby="projectListTitle">
             <h2 id="projectListTitle" class="projectTabs">
-              <button type="button" :class="{ active: projectType === 'local' }" :aria-pressed="projectType === 'local'" aria-controls="projectListContent" @click="projectType = 'local'">项目</button>
-              <button type="button" :class="{ active: projectType === 'team' }" :aria-pressed="projectType === 'team'" aria-controls="projectListContent" @click="projectType = 'team'">团队项目</button>
+              <button type="button" :class="{ active: projectType === 'local' }" :aria-pressed="projectType === 'local'" aria-controls="projectListContent" @click="projectType = 'local'">工作区（{{ projectList.length }}）</button>
+              <button type="button" :class="{ active: projectType === 'team' }" :aria-pressed="projectType === 'team'" aria-controls="projectListContent" @click="projectType = 'team'">团队工作区</button>
             </h2>
             <div v-if="projectType === 'local'" id="projectListContent" class="projectItems">
               <el-card class="projectLaunchCard" shadow="never" :bodyStyle="{ padding: '0', height: '100%' }">
-                <button class="projectLaunch" type="button" :disabled="creating || opening || relocationPicker?.selecting" :aria-busy="creating || relocationPicker?.selecting" title="选择空文件夹新建，或打开已有项目" @click="createProject(false)">
+                <button class="projectLaunch" type="button" :disabled="creating || opening || relocationPicker?.selecting" :aria-busy="creating || relocationPicker?.selecting" title="选择空文件夹新建，或打开已有工作区" @click="createProject(false)">
                   <span class="launchIcon">
                     <icon-loader-2 v-if="creating || relocationPicker?.selecting" class="isLoading" :size="24" aria-hidden="true" />
                     <icon-plus v-else :size="24" aria-hidden="true" />
                   </span>
                   <span class="launchText">
-                    <span class="launchTitle">新建项目</span>
-                    <span class="launchDescription">或打开已有项目</span>
+                    <span class="launchTitle">新建工作区</span>
+                    <span class="launchDescription">或打开已有工作区</span>
                   </span>
                 </button>
               </el-card>
-              <projectCard v-for="project in sortedProjects" :key="project.directory" :project="project" :disabled="creating || opening" :actionsLoading="exportingDirectory === project.directory" @select="openProject(project)">
+              <projectCard v-for="project in sortedProjects" :key="project.directory" :project="project" :disabled="creating || opening || !!deletingWorkspaceId" :actionsLoading="exportingDirectory === project.directory || deletingWorkspaceId === project.id" @select="openProject(project)">
                 <template #actions>
-                  <el-dropdown-item :icon="IconEdit" :disabled="creating || opening || exportingDirectory === project.directory" @click="renameProject(project)">重命名</el-dropdown-item>
+                  <el-dropdown-item :icon="IconEdit" :disabled="creating || opening || exportingDirectory === project.directory" @click="renameProject(project)">重命名工作区</el-dropdown-item>
                   <el-dropdown-item :icon="IconFileZip" :disabled="creating || opening || !!exportingDirectory" @click="exportProject(project)">打包导出 ZIP</el-dropdown-item>
-                  <el-dropdown-item class="removeAction" :icon="IconTrash" divided :disabled="creating || opening || exportingDirectory === project.directory" title="从列表移除，不删除文件" @click="workspaceStore.removeProject(project.directory)">移除项目</el-dropdown-item>
+                  <el-dropdown-item class="removeAction" :icon="IconTrash" :disabled="creating || opening || !!exportingDirectory || !!deletingWorkspaceId" @click="deleteWorkspace(project)">删除工作区</el-dropdown-item>
                 </template>
               </projectCard>
             </div>
@@ -132,8 +132,8 @@ import { getReadableFileMimeType, readableFileAccept } from "@toonflow/server/do
 import {
   IconQrcode, IconDeviceDesktop, IconHome, IconCompass,
   IconArrowUp, IconPlus, IconLoader2,
-  IconFolder, IconEdit, IconFileZip,
-  IconTrash, IconPaperclip,
+  IconFolder, IconEdit, IconFileZip, IconTrash,
+  IconPaperclip,
 } from "@tabler/icons-vue";
 import modelPopover from "@/components/modelPopover.vue";
 import attachmentList from "@/components/agent/attachmentList.vue";
@@ -169,7 +169,7 @@ const activeSection = ref("home");
 const projectType = ref<"local" | "team">("local");
 const homeSections = [
   { id: "home", label: "首页", icon: IconHome },
-  { id: "projects", label: "项目", icon: IconFolder },
+  { id: "projects", label: "工作区", icon: IconFolder },
   { id: "explore", label: "探索", icon: IconCompass },
 ];
 const mobileConnect = defineAsyncComponent(() => import("@/components/mobileConnect.vue"));
@@ -178,6 +178,7 @@ const pageLifetime = new AbortController();
 const creating = ref(false);
 const opening = ref(false);
 const exportingDirectory = ref("");
+const deletingWorkspaceId = ref("");
 const promptWorkspacePicker = ref<InstanceType<typeof workspacePicker>>();
 const relocationPicker = ref<InstanceType<typeof workspacePicker>>();
 const prompt = ref("");
@@ -206,6 +207,9 @@ const promptPlaceholder = ref(translate(placeholderPhrases[0]!));
 
 onMounted(() => {
   void loadAdvertisements();
+  void workspaceStore.refreshProjectList(pageLifetime.signal).catch(error => {
+    if (!pageLifetime.signal.aborted) ElMessage.error(error instanceof Error ? error.message : "读取工作区列表失败");
+  });
   window.addEventListener("dragend", clearAttachmentDrag, true);
   window.addEventListener("drop", clearAttachmentDrag, true);
   window.addEventListener("blur", clearAttachmentDrag);
@@ -557,11 +561,48 @@ async function exportProject(project: Project) {
 }
 
 async function renameProject(project: Project) {
-  const result = await ElMessageBox.prompt("请输入项目名称", "重命名项目", {
+  const result = await ElMessageBox.prompt("请输入工作区名称", "重命名工作区", {
     inputValue: project.name, confirmButtonText: "保存", cancelButtonText: "取消",
     inputValidator: value => !!value?.trim() || "项目名称不能为空",
   }).catch(() => null);
-  if (result) workspaceStore.renameProject(project.directory, result.value);
+  if (result) workspaceStore.renameProject(project.id, result.value);
+}
+
+async function deleteWorkspace(project: Project) {
+  if (creating.value || opening.value || exportingDirectory.value || deletingWorkspaceId.value) return;
+  deletingWorkspaceId.value = project.id;
+  try {
+    const { data } = await axios.get<{ code: number; data?: { workspaceId: string; name: string; counts: { dramas: number; canvases: number; assets: number }; busy: boolean }; message?: string }>("/api/workspaces/summary", {
+      params: { workspaceId: project.id, directory: project.directory },
+      headers: { "x-toonflow-workspace": "1" }, signal: pageLifetime.signal,
+    });
+    if (data.code !== 200 || !data.data || data.data.workspaceId !== project.id) throw new Error(data.message || "读取工作区信息失败");
+    if (data.data.busy) {
+      ElMessage.warning("工作区正在执行生成或 Agent 任务，请等待任务结束后再删除。");
+      return;
+    }
+    const confirmed = await ElMessageBox.confirm(
+      `工作区：${data.data.name}\n包含短剧 ${data.data.counts.dramas} 个、画布 ${data.data.counts.canvases} 个、素材 ${data.data.counts.assets} 个。删除后工作区目录及其中的数据将无法恢复。`,
+      "删除工作区",
+      { type: "warning", confirmButtonText: "删除工作区", cancelButtonText: "取消", confirmButtonClass: "el-button--danger", closeOnClickModal: false },
+    ).then(() => true, () => false);
+    if (!confirmed) return;
+    const result = await axios.delete<{ code: number; data?: { workspaceId: string }; message?: string }>("/api/workspaces/remove", {
+      data: { workspaceId: project.id, directory: project.directory },
+      headers: { "x-toonflow-workspace": "1" }, signal: pageLifetime.signal,
+    });
+    if (result.data.code !== 200 || result.data.data?.workspaceId !== project.id) throw new Error(result.data.message || "删除工作区失败");
+    workspaceStore.removeProject(project.id);
+    ElMessage.success(`工作区“${data.data.name}”已删除。`);
+  } catch (error) {
+    if (pageLifetime.signal.aborted) return;
+    const message = axios.isAxiosError<{ message?: string }>(error)
+      ? error.response?.data.message || "删除工作区失败，请重试"
+      : error instanceof Error ? error.message : "删除工作区失败，请重试";
+    ElMessage.error(message);
+  } finally {
+    deletingWorkspaceId.value = "";
+  }
 }
 
 async function createProject(fromPrompt = true) {
@@ -571,7 +612,7 @@ async function createProject(fromPrompt = true) {
   creating.value = true;
   try {
     const { directory, empty } = await useWorkspaceFiles(path).list();
-    if (fromPrompt && !empty) return ElMessage.warning("该文件夹不为空，请重新选择空文件夹；已有项目请使用“新建项目”入口或点击项目列表打开。");
+    if (fromPrompt && !empty) return ElMessage.warning("该文件夹不为空，请重新选择空文件夹；已有工作区请使用“新建工作区”入口或点击工作区列表打开。");
     if (empty) await useWorkspaceFiles(directory).writeJson("画布1.json", { toonflowCanvas: true, nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } }, true);
     await workspaceStore.openProject(directory);
     if (fromPrompt && (prompt.value.trim() || promptAttachments.value.length)) {

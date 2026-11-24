@@ -1,5 +1,10 @@
 <template>
   <div class="agentConversation">
+    <details v-if="canvasSnapshot" class="canvasContextStatus">
+      <summary>上下文：{{ canvasSnapshot.projectName ?? "普通画布" }}{{ canvasSnapshot.episodeName ? ` · ${canvasSnapshot.episodeName}` : "" }} · {{ canvasSnapshot.nodes[0]?.label ?? "未选中节点" }}{{ canvasSnapshot.nodes[0] ? ` (${canvasSnapshot.nodes[0].type})` : "" }}</summary>
+      <div>范围：当前画布、选中节点及其直接关系；关联人物 {{ canvasSnapshot.nodes[0]?.characters.length ?? 0 }}、场景 {{ canvasSnapshot.nodes[0]?.scene ? 1 : 0 }}、素材 {{ canvasSnapshot.nodes[0]?.assets.length ?? 0 }}</div>
+      <pre>{{ JSON.stringify(canvasSnapshot, null, 2) }}</pre>
+    </details>
     <localCodexConversation v-if="selectedModelChoice?.providerId === 'localCodex' && !allowCodexOAuthTest" v-model:selectedModel="selectedModel" :directory="directory" />
     <template v-else>
     <messageList
@@ -80,7 +85,7 @@ import anonymousData from "@/lib/anonymousData";
 import { codexOAuthTestModels, localCodexModelChoice, modelChoices, refreshCodexOAuthTestModels, refreshModelChoices } from "@/stores/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { AgentAttachment, AgentConversation, AgentMessage } from "./types";
-import type { AgentEvent, AgentQueue, AgentQueuedMessage } from "@toonflow/server/agent/types";
+import type { AgentCanvasSnapshot, AgentEvent, AgentQueue, AgentQueuedMessage } from "@toonflow/server/agent/types";
 import { createConversationStream, createReplyStream, readAgentEvents } from "./replyStream";
 import { mentionPlainText } from "./mentionText";
 import type { CanvasContext } from "@toonflow/tool-canvas/runtime";
@@ -93,6 +98,8 @@ const emit = defineEmits<{ session: [file: string]; sent: [prompt: string]; even
 const workspaceStore = useWorkspaceStore();
 const directory = workspaceStore.project?.directory;
 const createCanvasContext = inject<(() => CanvasContext | undefined) | undefined>("canvas", undefined);
+const createCanvasSnapshot = inject<(() => AgentCanvasSnapshot | undefined) | undefined>("agentCanvasSnapshot", undefined);
+const canvasSnapshot = computed(() => props.active ? createCanvasSnapshot?.() : undefined);
 const messages = ref<AgentMessage[]>((props.initialSession?.messages ?? []).map(message => ({ ...message })));
 const stream = createConversationStream(messages);
 const remoteRunning = ref(props.initialSession?.running ?? false);
@@ -506,6 +513,8 @@ async function sendMessage(source?: AgentMessage) {
   const initialSessionRunId = lastSessionRunId;
   const isSuperseded = () => lastSessionRunId !== initialSessionRunId && lastSessionRunId !== requestRunId;
   const canvasContext = createCanvasContext?.();
+  const currentCanvasSnapshot = canvasContext ? createCanvasSnapshot?.() : undefined;
+  const frozenCanvasSnapshot = currentCanvasSnapshot ? JSON.parse(JSON.stringify(currentCanvasSnapshot)) : undefined;
   controller = requestController;
   if (!remoteRunning.value) runId = requestRunId;
   connected = false;
@@ -544,7 +553,7 @@ async function sendMessage(source?: AgentMessage) {
     const response = await fetch("/api/agent", {
       method: "POST",
       headers: { "Accept-Language": locale.value, "Content-Type": "application/json", "x-toonflow-workspace": "1" },
-      body: JSON.stringify({ prompt, mentions, attachments: attachments.map(({ name, path, mimeType }) => ({ name, path, mimeType })), directory, runId: requestRunId, providerId: currentModel.providerId, modelId: currentModel.modelId, thinkingLevel: reasoningEffort.value || undefined, sessionFile: props.sessionFile, resendFrom, canvas: canvasContext ? { id: canvasContext.id, tools: canvasContext.tools } : undefined }),
+      body: JSON.stringify({ prompt, mentions, attachments: attachments.map(({ name, path, mimeType }) => ({ name, path, mimeType })), directory, runId: requestRunId, providerId: currentModel.providerId, modelId: currentModel.modelId, thinkingLevel: reasoningEffort.value || undefined, sessionFile: props.sessionFile, resendFrom, canvas: canvasContext ? { id: canvasContext.id, tools: canvasContext.tools, snapshot: frozenCanvasSnapshot } : undefined }),
       signal: requestController.signal,
     });
     connected = response.ok;
@@ -729,6 +738,18 @@ onBeforeUnmount(abortRequest);
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+
+  .canvasContextStatus {
+    flex-shrink: 0;
+    margin: 6px 12px;
+    padding: 5px 8px;
+    border: 1px solid var(--el-border-color-light);
+    border-radius: 8px;
+    color: var(--el-text-color-regular);
+    font-size: 12px;
+    summary { cursor: pointer; }
+    pre { max-height: 180px; overflow: auto; white-space: pre-wrap; }
+  }
 
   .compactionStatus {
     display: flex;
