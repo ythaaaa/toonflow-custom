@@ -5,6 +5,7 @@ import apiMart from "./src/media/apiMart";
 import metaso from "./src/media/metaso";
 import compshare from "./src/media/compshare";
 import gptImageSubscription from "./src/media/gptImageSubscription";
+import autodlComfyUi from "./src/media/autodlComfyUi";
 
 export type Provider = ProviderDefinition;
 export type ProviderPrice = NonNullable<Awaited<ReturnType<NonNullable<Provider["getPrice"]>>>>;
@@ -17,4 +18,4 @@ export type AudioConvertOptions = Parameters<ProviderTools["audio"]["convert"]>[
 export type { FfmpegFactory, FfmpegCommand } from "@toonflow/ffmpeg/types";
 
 export const languageProviders = [deepSeek] as const;
-export const mediaProviders = [apiMart, metaso, compshare, gptImageSubscription] as const;
+export const mediaProviders = [apiMart, metaso, compshare, gptImageSubscription, autodlComfyUi] as const;

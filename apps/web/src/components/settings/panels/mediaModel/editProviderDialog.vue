@@ -13,6 +13,31 @@
     <div class="providerEditor">
       <messageMarkdown v-if="provider?.readme" class="providerReadme" :content="provider.readme" />
       <form-create v-model="formValues" v-model:api="formApi" :rule="formRules" :option="formOptions" />
+      <div v-if="provider?.id === 'autodlComfyUi'" class="comfyTools">
+        <div class="comfyConnection">
+          <el-button :loading="testingConnection" :disabled="saving || !formApi" @click="testConnection">连接测试</el-button>
+          <el-text type="info" size="small">连接测试只检查 ComfyUI API，不会提交生成任务。</el-text>
+        </div>
+        <div class="workflowHeading">
+          <div>
+            <h4>ComfyUI API 工作流</h4>
+            <el-text type="info" size="small">导入 API 格式 JSON；选中工作流模型的“编辑”可配置节点映射。</el-text>
+          </div>
+          <input ref="workflowInput" type="file" accept=".json,application/json" hidden :disabled="saving" @change="importComfyWorkflow" />
+          <el-button :icon="IconPlus" size="small" :disabled="saving" @click="workflowInput?.click()">导入 API 工作流</el-button>
+        </div>
+        <el-alert title="ComfyUI：导出（API）JSON；普通界面工作流 JSON 不能直接提交。单个文件最大 500 KB。" type="info" :closable="false" />
+        <div v-if="comfyWorkflows.length" class="workflowList">
+          <el-card v-for="item in comfyWorkflows" :key="item.id" shadow="never">
+            <div class="workflowSummary">
+              <div><strong>{{ item.label }}</strong><span>{{ Object.keys(item.comfyWorkflow).length }} 个节点</span></div>
+              <el-button text size="small" :disabled="saving" @click="editModel(models.indexOf(item))">配置模型与映射</el-button>
+            </div>
+            <el-text type="info" size="small">{{ workflowMappingSummary(item) }}</el-text>
+          </el-card>
+        </div>
+        <el-text v-else type="info" size="small">尚未导入工作流。</el-text>
+      </div>
       <div class="modelHeader">
         <h4>模型配置 <el-text type="info">{{ models.length }}</el-text></h4>
         <el-button :icon="IconPlus" size="small" :disabled="saving" @click="editModel()">手动添加</el-button>
@@ -51,6 +76,7 @@
       v-model="modelEditorVisible"
       :model="editingModelIndex === undefined ? undefined : models[editingModelIndex]"
       :models="models"
+      :comfyUiMode="provider?.id === 'autodlComfyUi'"
       @confirmed="confirmModel" />
   </el-dialog>
   <el-dialog v-model="testVisible" :title="`测试媒体模型：${testProvider?.label ?? ''}`" width="min(1120px, calc(100vw - 32px))" alignCenter appendToBody destroyOnClose :closeOnClickModal="false">
@@ -66,6 +92,7 @@ import { translate } from "@toonflow/i18n/vue";
 import axios from "axios";
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, toRaw, watch, type Component } from "vue";
 import { IconPlus, IconTrash, IconDeviceFloppy, IconEdit, IconPlayerPlay } from "@tabler/icons-vue";
+import { ElMessage } from "element-plus";
 import formCreate, { type Api, type Options } from "@toonflow/provider-web/formCreate";
 import { modelIcon } from "@toonflow/model-icons";
 import messageMarkdown from "@/components/messageMarkdown.vue";
@@ -94,6 +121,27 @@ const testModelId = ref("");
 const testProvider = shallowRef<MediaProvider>();
 const testSource = ref("");
 const testConfig = ref<Record<string, unknown>>({});
+const testingConnection = ref(false);
+const workflowInput = ref<HTMLInputElement>();
+type ComfyMappingField = { nodeId: string; input: string };
+type ComfyWorkflow = MediaProviderModel & {
+  comfyWorkflow: Record<string, { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } }>;
+  comfyMapping?: Record<string, unknown> & {
+    prompt?: ComfyMappingField;
+    image?: ComfyMappingField;
+    firstFrame?: ComfyMappingField;
+    lastFrame?: ComfyMappingField;
+    width?: ComfyMappingField;
+    height?: ComfyMappingField;
+    resolution?: ComfyMappingField;
+    duration?: ComfyMappingField;
+    fps?: ComfyMappingField;
+    durationUnit?: "seconds" | "frames";
+    frameRate?: number;
+    outputNodeIds?: string[];
+  };
+};
+const comfyWorkflows = computed(() => models.value.filter((item): item is ComfyWorkflow => !!item.comfyWorkflow && typeof item.comfyWorkflow === "object"));
 let testLoading: AbortController | undefined;
 const modelTypes = { get image() { return translate("图片"); }, get video() { return translate("视频"); }, get audio() { return translate("音频"); }, get text() { return translate("文本"); } };
 const modeLabels: Record<string, string> = {
@@ -147,6 +195,97 @@ async function testModel(index: number) {
   } finally {
     if (testLoading === controller) { testLoading = undefined; loadingTestModel.value = undefined; }
   }
+}
+
+async function testConnection() {
+  if (!provider || provider.id !== "autodlComfyUi" || testingConnection.value || !formApi.value) return;
+  testingConnection.value = true;
+  try {
+    const { data } = await axios.post<{ code: number; data?: { message?: string }; message?: string }>("/api/providers/media/testConnection", {
+      fileName: provider.fileName,
+      revision: revision.value,
+      config: structuredClone(toRaw(formApi.value.formData())),
+    }, { headers: { "x-toonflow-workspace": "1" }, timeout: 15000 });
+    if (data.code !== 200) throw new Error(data.message || "连接测试失败");
+    ElMessage.success(data.data?.message || "连接成功");
+  } catch (error) {
+    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.message || error.message : error instanceof Error ? error.message : "连接测试失败");
+  } finally { testingConnection.value = false; }
+}
+
+async function importComfyWorkflow(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  try {
+    if (file.size > 500 * 1024) throw new Error("单个工作流文件不能超过 500 KB");
+    const source: unknown = JSON.parse(await file.text());
+    const rawWorkflow = source && typeof source === "object" && !Array.isArray(source) ? source as Record<string, unknown> : undefined;
+    if (!rawWorkflow || !Object.keys(rawWorkflow).length || Object.keys(rawWorkflow).length > 5000 || Array.isArray(rawWorkflow.nodes) || "links" in rawWorkflow) {
+      throw new Error("这不是 ComfyUI API 格式工作流；请从 ComfyUI 导出（API）JSON");
+    }
+    const workflow: ComfyWorkflow["comfyWorkflow"] = {};
+    for (const [nodeId, value] of Object.entries(rawWorkflow)) {
+      const node = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+      const inputs = node?.inputs && typeof node.inputs === "object" && !Array.isArray(node.inputs) ? node.inputs as Record<string, unknown> : undefined;
+      if (!/^\d+$/.test(nodeId) || typeof node?.class_type !== "string" || !node.class_type || !inputs) throw new Error(`节点 ${nodeId} 不是有效的 API 节点`);
+      const meta = node._meta && typeof node._meta === "object" && !Array.isArray(node._meta) ? node._meta as Record<string, unknown> : undefined;
+      workflow[nodeId] = { class_type: node.class_type, inputs, ...(typeof meta?.title === "string" ? { _meta: { title: meta.title } } : {}) };
+    }
+    const id = `workflow${Date.now().toString(36)}`;
+    const label = file.name.replace(/\.json$/i, "").trim() || "ComfyUI 工作流";
+    const comfyMapping = inferComfyMapping(workflow);
+    const mode = ["text"];
+    if (comfyMapping.image) mode.push("singleImage");
+    if (comfyMapping.firstFrame && comfyMapping.lastFrame) mode.push("startEndRequired");
+    models.value.push({
+      id, label, type: "video", mode,
+      durationResolutionMap: [{ duration: [5], resolution: ["720p"] }],
+      comfyWorkflow: workflow,
+      comfyMapping,
+    });
+    ElMessage.success("API 工作流已导入，请配置模型和节点映射后保存");
+    editModel(models.value.length - 1);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "导入工作流失败");
+  }
+}
+
+function inferComfyMapping(workflow: ComfyWorkflow["comfyWorkflow"]) {
+  const inputs = Object.entries(workflow).flatMap(([nodeId, node]) => Object.entries(node.inputs)
+    .filter(([, value]) => value === null || ["string", "number", "boolean"].includes(typeof value))
+    .map(([input, value]) => ({ nodeId, input, value, classType: node.class_type.toLowerCase(), title: node._meta?.title?.toLowerCase() ?? "" })));
+  const find = (predicate: (item: typeof inputs[number]) => boolean) => {
+    const item = inputs.find(predicate);
+    return item ? { nodeId: item.nodeId, input: item.input } : undefined;
+  };
+  const mapping = {
+    prompt: find(item => /text|prompt|positive/.test(item.input.toLowerCase()) && /clip|textencode|prompt/i.test(item.classType)),
+    image: find(item => item.input === "image" && /loadimage/i.test(item.classType)),
+    firstFrame: find(item => item.input === "image" && /loadimage/i.test(item.classType) && /first|start|首帧/i.test(item.title)),
+    lastFrame: find(item => item.input === "image" && /loadimage/i.test(item.classType) && /last|end|尾帧/i.test(item.title)),
+    width: find(item => item.input.toLowerCase() === "width"),
+    height: find(item => item.input.toLowerCase() === "height"),
+    resolution: find(item => item.input.toLowerCase() === "resolution"),
+    duration: find(item => /^(duration|length|num_frames|frames|total_frames)$/i.test(item.input)),
+    fps: find(item => /^(fps|frame_rate|framerate)$/i.test(item.input)),
+    durationUnit: "frames" as const,
+    frameRate: 24,
+    outputNodeIds: Object.entries(workflow).filter(([, node]) => /savevideo|videocombine|video.*combine/i.test(node.class_type)).map(([nodeId]) => nodeId),
+  };
+  if (mapping.duration && !/frame|length/i.test(mapping.duration.input)) mapping.durationUnit = "seconds" as typeof mapping.durationUnit;
+  return Object.fromEntries(Object.entries(mapping).filter(([, value]) => value !== undefined));
+}
+
+function workflowMappingSummary(model: ComfyWorkflow) {
+  const mapping = model.comfyMapping ?? {};
+  const mapped = [
+    ["提示词", mapping.prompt], ["参考图", mapping.image || mapping.firstFrame || mapping.lastFrame],
+    ["尺寸", mapping.width || mapping.height || mapping.resolution], ["时长", mapping.duration],
+    ["输出", mapping.outputNodeIds?.length ? mapping.outputNodeIds.join("、") : undefined],
+  ].map(([label, value]) => `${label}${value ? "✓" : "—"}`);
+  return mapped.join(" · ");
 }
 
 function modelTags(model: MediaProviderModel) {
@@ -234,6 +373,23 @@ async function saveModels() {
   overscroll-behavior: contain;
 
   .providerReadme { margin-bottom: 20px; }
+
+  .comfyTools {
+    display: grid;
+    gap: 12px;
+    margin: 14px 0 20px;
+    padding: 14px;
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 8px;
+    background: var(--el-fill-color-extra-light);
+
+    .comfyConnection, .workflowHeading, .workflowSummary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .comfyConnection { justify-content: flex-start; }
+    .workflowHeading h4 { margin: 0 0 4px; font-size: 14px; }
+    .workflowList { display: grid; gap: 8px; }
+    .workflowSummary > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; }
+    .workflowSummary span { color: var(--el-text-color-secondary); font-size: 12px; }
+  }
 
   .modelHeader {
     display: flex;

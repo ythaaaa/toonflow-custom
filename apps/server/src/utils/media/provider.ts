@@ -561,7 +561,7 @@ export async function loadMediaProviderSource(source: string, config: Record<str
   }
   // ACT: VM 只隔离可信供应商的全局上下文；不可信代码需要独立进程等更强隔离。
   const context = createContext({
-    Buffer, atob, btoa, URL, URLSearchParams, TextEncoder, TextDecoder, Blob,
+    Buffer, atob, btoa, URL, URLSearchParams, Headers, FormData, TextEncoder, TextDecoder, Blob,
     AbortController, AbortSignal, setTimeout, clearTimeout,
   }, { codeGeneration: { strings: false, wasm: false } });
   const rejectImport = () => { throw new Error("供应商不能导入模块，请使用 this.tool 中的宿主工具"); };
@@ -674,4 +674,13 @@ export async function loadMediaProviderSource(source: string, config: Record<str
     } });
   }
   return provider;
+}
+
+export async function testMediaProviderConnection(fileName: string, revision: string, config: Record<string, unknown>) {
+  if (!mediaProviderFileSchema.safeParse(fileName).success) invalid("供应商文件名无效");
+  const current = await getMediaProvider(fileName.slice(0, -3));
+  if (current.revision !== revision) invalid("供应商配置已更新，请刷新后重试", 409);
+  const provider = await loadMediaProviderSource(current.source, config, AbortSignal.timeout(12000));
+  if (!provider.testConnection) invalid("此供应商未提供连接测试");
+  return provider.testConnection();
 }

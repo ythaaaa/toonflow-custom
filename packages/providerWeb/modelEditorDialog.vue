@@ -75,6 +75,77 @@
             </div>
           </el-form-item>
         </template>
+        <template v-if="comfyUiMode && workflowNodes">
+          <el-divider contentPosition="left">ComfyUI 工作流节点映射</el-divider>
+          <p class="comfyMappingHint">把 Toonflow 的输入映射到 API 工作流中的可编辑节点参数；连线输入不会出现在列表中。</p>
+          <el-form-item label="正向提示词">
+            <el-select v-model="mappingDraft.prompt" clearable filterable aria-label="正向提示词节点映射">
+              <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="单张参考图">
+            <el-select v-model="mappingDraft.image" clearable filterable aria-label="参考图片节点映射">
+              <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+            </el-select>
+          </el-form-item>
+          <div class="frameMapping">
+            <el-form-item label="首帧">
+              <el-select v-model="mappingDraft.firstFrame" clearable filterable aria-label="首帧节点映射">
+                <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="尾帧">
+              <el-select v-model="mappingDraft.lastFrame" clearable filterable aria-label="尾帧节点映射">
+                <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <div class="frameMapping">
+            <el-form-item label="宽度">
+              <el-select v-model="mappingDraft.width" clearable filterable aria-label="宽度节点映射">
+                <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="高度">
+              <el-select v-model="mappingDraft.height" clearable filterable aria-label="高度节点映射">
+                <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <div class="frameMapping">
+            <el-form-item label="分辨率参数（可选）">
+              <el-select v-model="mappingDraft.resolution" clearable filterable aria-label="分辨率节点映射">
+                <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="时长参数">
+              <el-select v-model="mappingDraft.duration" clearable filterable aria-label="时长节点映射">
+                <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <div class="frameMapping">
+            <el-form-item label="时长单位">
+              <el-select v-model="mappingDraft.durationUnit" aria-label="工作流时长单位">
+                <el-option value="seconds" label="秒" />
+                <el-option value="frames" label="帧数" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="帧率（用于秒转帧）">
+              <el-input-number v-model="mappingDraft.frameRate" :min="1" :max="120" :step="1" controlsPosition="right" aria-label="工作流帧率" />
+            </el-form-item>
+          </div>
+          <el-form-item label="帧率参数（可选）">
+            <el-select v-model="mappingDraft.fps" clearable filterable aria-label="帧率节点映射">
+              <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="输出视频节点">
+            <el-select v-model="mappingDraft.outputNodeIds" multiple clearable filterable aria-label="工作流输出节点">
+              <el-option v-for="item in workflowOutputOptions" :key="item.value" :value="item.value" :label="item.label" />
+            </el-select>
+          </el-form-item>
+        </template>
         <details class="modelOptions">
           <summary>更多配置（JSON）</summary>
           <el-input v-model="options" type="textarea" dir="ltr" :rows="6" resize="vertical" aria-label="模型的更多配置" />
@@ -90,8 +161,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
-import { ElAlert, ElButton, ElCheckbox, ElCheckboxGroup, ElDialog, ElForm, ElFormItem, ElInput, ElInputNumber, ElInputTag, ElOption, ElRadio, ElRadioGroup, ElSelect } from "element-plus";
+import { computed, ref, watch } from "vue";
+import { ElAlert, ElButton, ElCheckbox, ElCheckboxGroup, ElDialog, ElDivider, ElForm, ElFormItem, ElInput, ElInputNumber, ElInputTag, ElOption, ElRadio, ElRadioGroup, ElSelect } from "element-plus";
 import "element-plus/es/components/alert/style/css";
 import "element-plus/es/components/button/style/css";
 import "element-plus/es/components/checkbox/style/css";
@@ -109,7 +180,7 @@ import "element-plus/es/components/select/style/css";
 import { IconArrowRight, IconPlus, IconTrash } from "@tabler/icons-vue";
 import type { MediaProviderModel } from "./types";
 
-const { model, models } = defineProps<{ model?: MediaProviderModel; models: MediaProviderModel[] }>();
+const { model, models, comfyUiMode = false } = defineProps<{ model?: MediaProviderModel; models: MediaProviderModel[]; comfyUiMode?: boolean }>();
 const visible = defineModel<boolean>({ default: false });
 const emit = defineEmits<{ confirmed: [model: MediaProviderModel] }>();
 const modelTypes = [
@@ -141,6 +212,23 @@ const formError = ref("");
 let original: Record<string, unknown> = {};
 let initialDraft = createDraft();
 let initialExtraMode: unknown;
+type ComfyNode = { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } };
+type ComfyInputMapping = { nodeId: string; input: string };
+type ComfyMapping = {
+  prompt?: ComfyInputMapping; image?: ComfyInputMapping; firstFrame?: ComfyInputMapping; lastFrame?: ComfyInputMapping;
+  width?: ComfyInputMapping; height?: ComfyInputMapping; resolution?: ComfyInputMapping; duration?: ComfyInputMapping; fps?: ComfyInputMapping;
+  durationUnit?: "seconds" | "frames"; frameRate?: number; outputNodeIds?: string[];
+};
+const workflowNodes = ref<Record<string, ComfyNode>>();
+const mappingDraft = ref({
+  prompt: "", image: "", firstFrame: "", lastFrame: "", width: "", height: "", resolution: "", duration: "", fps: "",
+  durationUnit: "frames" as "seconds" | "frames", frameRate: 24, outputNodeIds: [] as string[],
+});
+const workflowInputOptions = computed(() => Object.entries(workflowNodes.value ?? {}).flatMap(([nodeId, node]) => Object.entries(node.inputs)
+  .filter(([, value]) => value === null || ["string", "number", "boolean"].includes(typeof value))
+  .map(([input]) => ({ value: encodeMapping({ nodeId, input }), label: `#${nodeId} · ${node._meta?.title || node.class_type} → ${input}` }))));
+const workflowOutputOptions = computed(() => Object.entries(workflowNodes.value ?? {}).filter(([, node]) => /save|video|combine/i.test(node.class_type))
+  .map(([nodeId, node]) => ({ value: nodeId, label: `#${nodeId} · ${node._meta?.title || node.class_type}` })));
 
 function createDraft() {
   return {
@@ -192,6 +280,19 @@ watch(visible, (isVisible) => {
     delete extra.audio;
     delete extra.durationResolutionMap;
   }
+  workflowNodes.value = isRecord(extra.comfyWorkflow) ? extra.comfyWorkflow as Record<string, ComfyNode> : undefined;
+  const comfyMapping = isRecord(extra.comfyMapping) ? extra.comfyMapping as ComfyMapping : {};
+  delete extra.comfyWorkflow;
+  delete extra.comfyMapping;
+  mappingDraft.value = {
+    prompt: encodeMapping(comfyMapping.prompt), image: encodeMapping(comfyMapping.image),
+    firstFrame: encodeMapping(comfyMapping.firstFrame), lastFrame: encodeMapping(comfyMapping.lastFrame),
+    width: encodeMapping(comfyMapping.width), height: encodeMapping(comfyMapping.height),
+    resolution: encodeMapping(comfyMapping.resolution), duration: encodeMapping(comfyMapping.duration),
+    fps: encodeMapping(comfyMapping.fps), durationUnit: comfyMapping.durationUnit === "seconds" ? "seconds" : "frames",
+    frameRate: typeof comfyMapping.frameRate === "number" && Number.isFinite(comfyMapping.frameRate) ? comfyMapping.frameRate : 24,
+    outputNodeIds: Array.isArray(comfyMapping.outputNodeIds) ? comfyMapping.outputNodeIds.filter((item): item is string => typeof item === "string") : [],
+  };
   options.value = JSON.stringify(extra, null, 2);
   initialDraft = JSON.parse(JSON.stringify(draft.value));
   initialExtraMode = extra.mode;
@@ -211,6 +312,20 @@ function confirmModel() {
     const fields = ["id", "label", "type", ...(draft.value.type === "video" ? ["audio", "durationResolutionMap"] : [])];
     if (fields.some(field => field in extra)) throw new Error("已有表单项请直接在上方编辑");
     const value: MediaProviderModel = { ...extra, id, label, type: draft.value.type };
+    if (comfyUiMode && workflowNodes.value) {
+      const comfyMapping: ComfyMapping = {
+        durationUnit: mappingDraft.value.durationUnit,
+        frameRate: mappingDraft.value.frameRate,
+        outputNodeIds: [...mappingDraft.value.outputNodeIds],
+      };
+      for (const field of ["prompt", "image", "firstFrame", "lastFrame", "width", "height", "resolution", "duration", "fps"] as const) {
+        const selected = decodeMapping(mappingDraft.value[field]);
+        if (selected) comfyMapping[field] = selected;
+      }
+      value.comfyWorkflow = workflowNodes.value;
+      value.comfyMapping = comfyMapping;
+      if (!comfyMapping.prompt) throw new Error("请为此工作流选择正向提示词节点参数");
+    }
     const typeChanged = !model || value.type !== model.type;
     const changed = (...fields: (keyof typeof initialDraft)[]) => typeChanged || fields.some(field => JSON.stringify(draft.value[field]) !== JSON.stringify(initialDraft[field]));
     const modelFields = value.type === "image" ? ["mode"] : value.type === "video" ? ["mode", "audio", "durationResolutionMap"] : [];
@@ -248,6 +363,20 @@ function confirmModel() {
     formError.value = error instanceof Error ? error.message : "模型配置无效";
   }
 }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function encodeMapping(value: ComfyInputMapping | undefined) {
+  return value ? `${encodeURIComponent(value.nodeId)}::${encodeURIComponent(value.input)}` : "";
+}
+
+function decodeMapping(value: string): ComfyInputMapping | undefined {
+  const separator = value.indexOf("::");
+  if (separator < 0) return;
+  return { nodeId: decodeURIComponent(value.slice(0, separator)), input: decodeURIComponent(value.slice(separator + 2)) };
+}
 </script>
 
 <style lang="scss" scoped>
@@ -258,6 +387,9 @@ function confirmModel() {
   padding: 4px 8px;
 
   .el-select { width: 100%; }
+
+  .comfyMappingHint { margin: -8px 0 14px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
+  .frameMapping { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 
   .videoModes {
     width: 100%;

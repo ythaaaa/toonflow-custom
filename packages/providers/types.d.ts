@@ -140,6 +140,7 @@ interface ImageRequest extends MediaRequest {
 
 interface VideoRequest extends MediaRequest {
   prompt: string;
+  referenceOrder?: ({ type: "image" | "video" | "audio"; index: number } | { type: "firstFrame" | "lastFrame" | "text" })[];
   /** 当前生成模式；参考模式数组声明各类参考媒体数量上限。 */
   mode?: VideoMode;
   /** 参考图；首尾帧通过 firstFrame、lastFrame 单独传入。 */
@@ -225,6 +226,8 @@ interface ProviderDefinition<TRules extends readonly ProviderFormRule[] = readon
   readme?: string;
   rules: TRules;
   models: ProviderModel[];
+  /** 可选连接检测，仅用于设置界面验证服务可达性，不执行生成或创建任务。 */
+  testConnection?: (this: ProviderContext<ProviderConfig<TRules>>) => Promise<string>;
   /** 检查供应商适配文件是否有更新。 */
   checkForUpdates?: (this: ProviderContext<ProviderConfig<TRules>>) => Promise<ProviderUpdateInfo>;
   /** 获取更新文件的完整源码；写入与应用由宿主负责。 */
