@@ -5,7 +5,7 @@
 ## 启停
 
 ```powershell
-Set-Location 'C:\Users\yth\Desktop\Toonflow'
+Set-Location '<Toonflow 项目目录>'
 & .\codexBridge\startBridge.ps1
 & .\codexBridge\stopBridge.ps1
 ```

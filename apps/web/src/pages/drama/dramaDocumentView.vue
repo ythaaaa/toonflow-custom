@@ -32,7 +32,9 @@
 
     <div ref="documentBody" class="documentBody" :class="{ editing }">
       <el-skeleton v-if="loading" :rows="9" animated />
-      <div v-else-if="editing" ref="editPane" class="editPane">
+      <template v-else>
+      <p v-if="sourceHint" class="sourceHint" role="note">{{ sourceHint }}</p>
+      <div v-if="editing" ref="editPane" class="editPane">
         <div ref="editorFrame" class="editorFrame" :style="editorFrameStyle">
           <markdownEditor v-if="editing" :context="editorContext" />
         </div>
@@ -52,6 +54,7 @@
         <el-button type="primary" @click="emit('edit')">开始编辑</el-button>
       </el-empty>
       <article v-else class="markdownBody" v-html="renderedContent" />
+      </template>
     </div>
   </section>
 </template>
@@ -76,6 +79,7 @@ const props = defineProps<{
   saving: boolean;
   savingVersion: boolean;
   status: string;
+  sourceHint?: string;
   isEmpty: boolean;
   allowNewVersion: boolean;
   activeVersionId: string;
@@ -195,6 +199,7 @@ watch(() => props.editing, async editing => {
 .documentActions { display: flex; flex: 0 0 auto; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; :deep(.el-button) { gap: 4px; } }
 .saveState { color: var(--el-text-color-secondary); font-size: 12px; &.pending { color: var(--el-color-warning); } }
 .documentBody { flex: 1; min-height: 0; overflow: auto; padding: 24px 30px 48px; background: var(--el-bg-color); &.editing { display: flex; flex-direction: column; overflow: hidden; padding: 12px 30px 14px; } }
+.sourceHint { max-width: 1100px; margin: 0 auto 18px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
 .editPane { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .editorFrame { flex: 1 1 auto; min-width: 0; min-height: 220px; overflow: hidden; border: 1px solid var(--el-border-color-lighter); border-radius: 8px; background: var(--el-bg-color); :deep(.markdownEditor) { height: 100%; } :deep(.editorSurface) { background: var(--el-bg-color); } :deep(.editorBody .tiptap) { font-size: 16px; line-height: 1.8; } :deep(.sourceEditor) { font-size: 16px; line-height: 1.8; } }
 .editorResizeHandle { display: flex; flex: 0 0 12px; align-items: center; justify-content: center; cursor: ns-resize; touch-action: none; &:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: -2px; } span { width: 34px; height: 3px; border-radius: 3px; background: var(--el-border-color); } &:hover span { background: var(--el-color-primary-light-5); } }

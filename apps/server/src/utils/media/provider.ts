@@ -537,7 +537,8 @@ export async function deleteMediaProvider(fileName: string, revision: string) {
 }
 
 export async function loadMediaProviderSource(source: string, config: Record<string, unknown> = {}, signal?: AbortSignal, fetchRequest = fetch, cwd?: string,
-  saveTaskData?: (data: ProviderTaskData) => Promise<void>, platformAccount = false) {
+  saveTaskData?: (data: ProviderTaskData) => Promise<void>, platformAccount = false,
+  reportStage?: (stage: "uploading" | "submitting" | "waiting" | "downloading" | "recovering") => Promise<void>) {
   signal?.throwIfAborted();
   const { id, value } = parseProvider(source);
   if (platformAccount && id !== "toonflow") invalid("账号媒体供应商 ID 必须为 toonflow", 403);
@@ -583,6 +584,7 @@ export async function loadMediaProviderSource(source: string, config: Record<str
     sourceRevision: createHash("sha256").update(source).digest("hex"),
     config: providerConfig,
     signal,
+    reportStage,
     saveTaskData: typeof definition.resumeTask === "function" && saveTaskData
       ? async (data: ProviderTaskData) => { await saveTaskData(parseTaskData(data, providerConfig)); } : undefined,
     tool: {
@@ -596,7 +598,7 @@ export async function loadMediaProviderSource(source: string, config: Record<str
       image: Bun.Image,
       media: createMediaTools(fetchRequest),
       audio: { convert: (input: Uint8Array, options: AudioConvertOptions) => convertAudio(input, options, signal) },
-      gptImageSubscription: { generateImage: (request: { model: string; prompt: string; images?: MediaInput[]; ratio?: string }) => generateSubscriptionImage(request, signal) },
+        gptImageSubscription: { generateImage: (request: { model: string; prompt: string; images?: MediaInput[]; ratio?: string; size?: string; quality?: string }) => generateSubscriptionImage(request, signal) },
       ffmpeg: async () => {
         if (!cwd) throw new Error("当前操作没有工作目录，无法使用 FFmpeg");
         return createWorkspaceFfmpeg(cwd, signal);

@@ -132,11 +132,16 @@ type ComfyWorkflow = MediaProviderModel & {
     prompt?: ComfyMappingField;
     image?: ComfyMappingField;
     referenceImages?: ComfyMappingField[];
+    referenceVideos?: ComfyMappingField[];
+    referenceAudios?: ComfyMappingField[];
     firstFrame?: ComfyMappingField;
     lastFrame?: ComfyMappingField;
     width?: ComfyMappingField;
     height?: ComfyMappingField;
     resolution?: ComfyMappingField;
+    aspectRatio?: ComfyMappingField;
+    megapixels?: ComfyMappingField;
+    upscale?: ComfyMappingField;
     duration?: ComfyMappingField;
     fps?: ComfyMappingField;
     durationUnit?: "seconds" | "frames";
@@ -231,11 +236,48 @@ async function importComfyWorkflow(event: Event) {
       if (!inputValues || !Object.keys(inputValues).length) {
         throw new Error("Zealman JSON 需要包含非空 input_values 参数对象");
       }
-      const label = file.name.replace(/\.json$/i, "").trim() || rawWorkflow.workflow_id;
-      models.value.push({ id: `workflow${Date.now().toString(36)}`, label, type: "video", mode: [],
-        zealmanWorkflowId: rawWorkflow.workflow_id.trim(), zealmanInputs: inputValues, comfyMapping: {},
+      const workflowId = rawWorkflow.workflow_id.trim();
+      const label = file.name.replace(/\.json$/i, "").trim() || workflowId;
+      const referenceMappings = Object.fromEntries((["image", "video", "audio"] as const).flatMap(mediaType => {
+        const references = Object.keys(inputValues)
+          .map(inputName => ({ inputName, match: new RegExp(`^ref_${mediaType}_(\\d+)$`).exec(inputName) }))
+          .filter((item): item is { inputName: string; match: RegExpExecArray } => !!item.match)
+          .sort((left, right) => Number(left.match[1]) - Number(right.match[1]))
+          .map(item => ({ nodeId: "input_values", input: item.inputName }));
+        return references.length ? [[`reference${mediaType[0]!.toUpperCase()}${mediaType.slice(1)}s`, references]] : [];
+      })) as NonNullable<ComfyWorkflow["comfyMapping"]>;
+      const mode: (string | string[])[] = ["text"];
+      const references = [
+        { mediaType: "image", count: referenceMappings.referenceImages?.length },
+        { mediaType: "video", count: referenceMappings.referenceVideos?.length },
+        { mediaType: "audio", count: referenceMappings.referenceAudios?.length },
+      ].filter((item): item is { mediaType: string; count: number } => typeof item.count === "number" && item.count > 0);
+      if (references.length) mode.push(references.map(({ mediaType, count }) => `${mediaType}Reference:${count}`));
+      const comfyMapping = { ...referenceMappings };
+      if (Object.hasOwn(inputValues, "prompt")) comfyMapping.prompt = { nodeId: "input_values", input: "prompt" };
+      let durationResolutionMap: { duration: number[]; resolution: string[] }[] | undefined;
+      let modelRules: Record<string, unknown>[] | undefined;
+      if (workflowId === "API-U17-9图1视频3音频V1-api") {
+        const mapping = (input: string) => Object.hasOwn(inputValues, input) ? { nodeId: "input_values", input } : undefined;
+        comfyMapping.aspectRatio = mapping("aspect_ratio");
+        comfyMapping.megapixels = mapping("megapixels");
+        comfyMapping.duration = mapping("value");
+        comfyMapping.durationUnit = "seconds";
+        comfyMapping.upscale = mapping("value_2");
+        const duration = inputValues.value;
+        durationResolutionMap = [{ duration: typeof duration === "number" && Number.isFinite(duration) ? [duration] : [], resolution: [] }];
+        const aspectRatio = ["1:1 (Square)", "2:3 (Portrait Photo)", "3:2 (Photo)", "3:4 (Portrait Standard)", "4:3 (Standard)", "9:16 (Portrait Widescreen)", "16:9 (Widescreen)", "21:9 (Ultrawide)"];
+        modelRules = [
+          ...(comfyMapping.aspectRatio ? [{ type: "select", field: "aspectRatio", title: "画幅比例", value: aspectRatio.includes(String(inputValues.aspect_ratio)) ? inputValues.aspect_ratio : "16:9 (Widescreen)", options: aspectRatio.map(value => ({ label: value, value })) }] : []),
+          ...(comfyMapping.megapixels && typeof inputValues.megapixels === "number" ? [{ type: "inputNumber", field: "megapixels", title: "生成像素量（megapixels）", value: inputValues.megapixels, props: { step: 0.1 } }] : []),
+          ...(comfyMapping.upscale && typeof inputValues.value_2 === "number" ? [{ type: "inputNumber", field: "upscale", title: "放大倍率", value: inputValues.value_2, props: { step: 0.1 } }] : []),
+        ];
+      }
+      models.value.push({ id: `workflow${Date.now().toString(36)}`, label, type: "video", mode,
+        ...(durationResolutionMap ? { durationResolutionMap } : {}), ...(modelRules ? { rules: modelRules } : {}),
+        zealmanWorkflowId: workflowId, zealmanInputs: inputValues, comfyMapping,
       });
-      ElMessage.success("Zealman 工作流已导入，请明确配置提示词、图片和其他参数映射后保存");
+      ElMessage.success("Zealman 工作流已导入，请核对参考素材、提示词及参数映射后保存");
       editModel(models.value.length - 1);
       return;
     }
@@ -299,7 +341,9 @@ function workflowMappingSummary(model: ComfyWorkflow) {
   const mapping = model.comfyMapping ?? {};
   const mapped = [
     ["提示词", mapping.prompt], ["参考图", mapping.image || mapping.referenceImages?.length || mapping.firstFrame || mapping.lastFrame],
-    ["尺寸", mapping.width || mapping.height || mapping.resolution], ["时长", mapping.duration],
+    ["参考视频", mapping.referenceVideos?.length], ["参考音频", mapping.referenceAudios?.length],
+    ["尺寸", mapping.width || mapping.height || mapping.resolution], ["画幅", mapping.aspectRatio],
+    ["像素量", mapping.megapixels], ["放大倍率", mapping.upscale], ["时长", mapping.duration],
     ["输出", model.zealmanWorkflowId ? "Zealman 结果视频" : mapping.outputNodeIds?.length ? mapping.outputNodeIds.join("、") : undefined],
   ].map(([label, value]) => `${label}${value ? "✓" : "—"}`);
   return mapped.join(" · ");

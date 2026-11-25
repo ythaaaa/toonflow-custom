@@ -24,6 +24,7 @@ const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const mediaSchema = z.strictObject({ path: relativePathSchema, mimeType: z.string().min(1).max(256), mediaType: mediaTypeSchema });
 const checkpointSchema = z.strictObject({
   providerData: z.record(z.string(), z.json()).optional(),
+  stage: z.enum(["uploading", "submitting", "waiting", "downloading", "recovering"]).optional(),
   assets: z.array(z.strictObject({
     type: z.literal("url"), mediaType: mediaTypeSchema, url: z.string().regex(/^https?:\/\//i),
     mimeType: z.string().optional(), name: z.string().optional(),
@@ -52,7 +53,7 @@ const recordSchema = z.strictObject({
 }).superRefine((record, context) => {
   const issue = (message: string) => context.addIssue({ code: "custom", message });
   if (!record.request || !record.mediaType) {
-    if (record.state !== "cancelled" || record.request || record.mediaType) issue("任务缺少生成请求");
+    if (!(["cancelled", "interrupted"].includes(record.state)) || record.request || record.mediaType) issue("任务缺少生成请求");
   } else if (!requestSchemas[record.mediaType].safeParse(record.request).success) issue("任务生成请求无效");
   if (record.state === "running" ? record.result !== undefined : record.result === undefined) issue("任务状态与结果不一致");
   if (record.state === "succeeded" && (record.result?.code !== 200 || !record.result.data?.length)) issue("任务成功结果无效");
@@ -288,7 +289,11 @@ function publicData(task: MediaTask) {
 
 async function snapshot(task: MediaTask, owner?: AuthIdentity | null) {
   const { taskId, state, nodeId, canvasPath, result } = task.record;
-  return { taskId, state, resumable: await resumable(task), nodeId, canvasPath,
+  const canResume = await resumable(task);
+  // ACT: a just-stopped AutoDL submit may still be persisting prompt_id; keep polling enabled until that local request settles.
+  const awaitingCheckpoint = task.active && state === "interrupted" && task.record.request?.providerId === "autodlComfyUi";
+  return { taskId, state, resumable: canResume || awaitingCheckpoint, nodeId, canvasPath,
+    stage: task.record.checkpoint.stage, createdAt: task.record.createdAt,
     ...(owner?.role === "user" ? {} : { providerData: publicData(task) }), ...(result ? { result } : {}) };
 }
 
@@ -396,7 +401,9 @@ async function execute(task: MediaTask, resume: boolean) {
     const files = await generateMedia(record.cwd, record.mediaType!, record.request!, task.controller!.signal, {
       taskId: record.taskId, resume, checkpoint: record.checkpoint, modelRouteCipher: record.modelRouteCipher,
       save: patch => locked(task.key, async () => {
-        if (record.state !== "running") throw new Error("生成已停止");
+        const recoveryCheckpoint = record.state === "interrupted" && record.request?.providerId === "autodlComfyUi"
+          && Object.keys(patch).length === 1 && Object.hasOwn(patch, "providerData");
+        if (record.state !== "running" && !recoveryCheckpoint) throw new Error("生成已停止");
         Object.assign(record.checkpoint, patch);
         await persist(task);
       }),
@@ -588,17 +595,49 @@ export async function cancel(cwd: string, taskIds: string[], owner?: AuthIdentit
   }));
 }
 
+export async function stopWaiting(cwd: string, taskIds: string[], owner?: AuthIdentity | null) {
+  requireOwner(owner);
+  cwd = await realpath(cwd);
+  return Promise.all(taskIds.map(taskId => {
+    const key = taskPath(cwd, taskId);
+    return locked(key, async () => {
+      let task = await load(cwd, taskId, key, owner);
+      const now = Date.now();
+      const exclusive = !task;
+      if (!task) {
+        task = { key, blobs: [], active: false, settledAt: now, record: {
+          version: 1, taskId, cwd, ownerUserId: owner?.role === "user" ? owner.id : undefined,
+          state: "interrupted", checkpoint: {}, createdAt: now, updatedAt: now,
+          result: error<GeneratedMedia[]>("已停止本地等待；云端提交状态未知，请先复查原任务", null, 409),
+        } };
+        tasks.set(key, task);
+      } else {
+        if (task.record.request && task.record.request.providerId !== "autodlComfyUi") invalid("仅 AutoDL ComfyUI 任务支持停止本地等待", 400);
+        if (["succeeded", "failed", "cancelled"].includes(task.record.state)) return snapshot(task, owner);
+        task.record.state = "interrupted";
+        task.record.result = error<GeneratedMedia[]>("已停止 Toonflow 本地等待；AutoDL 云端任务可能仍在运行。请复查原任务，确认结束前不能重新提交", null, 409);
+      }
+      await persist(task, exclusive);
+      task.controller?.abort(new Error("已停止 Toonflow 本地等待；云端任务可能仍在运行"));
+      return snapshot(task, owner);
+    });
+  }));
+}
+
 export async function wait(cwd: string, taskId: string, owner?: AuthIdentity | null, signal?: AbortSignal): Promise<GeneratedMedia[]> {
   requireOwner(owner);
-  if (signal?.aborted) { await cancel(cwd, [taskId], owner); signal.throwIfAborted(); }
   cwd = await realpath(cwd);
   const task = await load(cwd, taskId, taskPath(cwd, taskId), owner);
   if (!task) invalid("生成任务不存在", 404);
+  if (signal?.aborted) {
+    if (task.record.request?.providerId !== "autodlComfyUi") await cancel(cwd, [taskId], owner);
+    signal.throwIfAborted();
+  }
   let abort: (() => void) | undefined;
   try {
     await Promise.race([task.completion, new Promise<never>((_resolve, reject) => {
       abort = () => {
-        void cancel(cwd, [taskId], owner).catch(() => { console.warn("取消媒体任务失败"); });
+        if (task.record.request?.providerId !== "autodlComfyUi") void cancel(cwd, [taskId], owner).catch(() => { console.warn("取消媒体任务失败"); });
         reject(signal?.reason);
       };
       if (signal?.aborted) abort();

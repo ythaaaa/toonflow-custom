@@ -18,6 +18,7 @@
     "./showNodeError": "./src/showNodeError.ts",
     "./useNodeReferences": "./src/useNodeReferences.ts",
     "./useNodeGeneration": "./src/useNodeGeneration.ts",
+    "./generationStatus": "./src/components/generationStatus.vue",
     "./useModelForm": "./src/useModelForm.ts",
     "./useAudioTranscription": "./src/useAudioTranscription.ts",
     "./groupNodeModels": "./src/groupNodeModels.ts"

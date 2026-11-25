@@ -123,6 +123,8 @@ type MediaTaskResult = { code: number; data: NodeMediaResult[] | null; message: 
 export type NodeMediaTaskStatus = {
   taskId: string;
   state?: "running" | "interrupted" | "succeeded" | "failed" | "cancelled";
+  stage?: "uploading" | "submitting" | "waiting" | "downloading" | "recovering";
+  createdAt?: number;
   resumable?: boolean;
   providerData?: unknown;
   nodeId?: string;
@@ -174,7 +176,7 @@ function createMediaTasks() {
               if (!task || task !== waitingTasks.get(id)) continue;
               const item = byId.get(id);
               if (!item) throw new Error("生成任务响应不完整，请重试");
-              task.resume = false;
+              task.resume = item.state === "interrupted" && item.resumable === true;
               task.failedAt = undefined;
               try { await task.onStatus?.(item); }
               catch (error) { task.fail(error); continue; }
@@ -390,11 +392,17 @@ export function useNodeAi(options: { onModelsChanged?: () => unknown } = {}) {
       }
       throw error;
     })).then(async result => {
-      if (options.isCancelled?.()) await cancelMedia(input.directory, taskId);
+      if (options.isCancelled?.()) {
+        if (input.providerId === "autodlComfyUi") await stopWaitingMedia(input.directory, taskId);
+        else await cancelMedia(input.directory, taskId);
+      }
       return result;
     });
     const explicitCancel = () => {
-      if (!options.taskId) void submitted.then(() => cancelMedia(input.directory, taskId), () => cancelMedia(input.directory, taskId)).catch(() => {});
+      if (!options.taskId) {
+        const stop = input.providerId === "autodlComfyUi" ? stopWaitingMedia : cancelMedia;
+        void submitted.then(async () => { await stop(input.directory, taskId); }, async () => { await stop(input.directory, taskId); }).catch(() => {});
+      }
     };
     waitingSignal.addEventListener("abort", explicitCancel, { once: true });
     let abort = () => {};
@@ -415,7 +423,10 @@ export function useNodeAi(options: { onModelsChanged?: () => unknown } = {}) {
     try {
       return await mediaTasks.wait(input.directory, taskId, waitingSignal, options) as { path: string; mimeType: string; mediaType: T }[];
     } catch (error) {
-      if (!options.taskId && (error as { mediaTaskDisconnected?: boolean })?.mediaTaskDisconnected) void cancelMedia(input.directory, taskId).catch(() => {});
+      if (!options.taskId && (error as { mediaTaskDisconnected?: boolean })?.mediaTaskDisconnected) {
+        const stop = input.providerId === "autodlComfyUi" ? stopWaitingMedia : cancelMedia;
+        void stop(input.directory, taskId).catch(() => {});
+      }
       throw error;
     } finally {
       waitingSignal.removeEventListener("abort", explicitCancel);
@@ -443,6 +454,16 @@ export function useNodeAi(options: { onModelsChanged?: () => unknown } = {}) {
       method: "POST", headers: { "Content-Type": "application/json", "x-toonflow-workspace": "1" },
       body: JSON.stringify({ directory, taskIds: [taskId] }), signal: AbortSignal.timeout(10000),
     }).then(readResult);
+  }
+
+  async function stopWaitingMedia(directory: string, taskId: string) {
+    const tasks = await fetch("/api/ai/media/tasks/stopWaiting", {
+      method: "POST", headers: { "Content-Type": "application/json", "x-toonflow-workspace": "1" },
+      body: JSON.stringify({ directory, taskIds: [taskId] }), signal: AbortSignal.timeout(10000),
+    }).then(readResult<NodeMediaTaskStatus[]>);
+    const task = tasks.find(item => item.taskId === taskId);
+    if (!task) throw new Error("停止本地等待后未返回原任务状态，请复查任务后再继续");
+    return task;
   }
 
   async function generate(input: NodeAiRequest): Promise<NodeAiResult> {
@@ -502,5 +523,5 @@ export function useNodeAi(options: { onModelsChanged?: () => unknown } = {}) {
     return { text, ...(reasoning ? { reasoning } : {}) };
   }
 
-  return { getModels, getMediaModels, getMediaPrice, generateImage, generateVideo, generateAudio, resumeMedia, cancelMedia, generate };
+  return { getModels, getMediaModels, getMediaPrice, generateImage, generateVideo, generateAudio, resumeMedia, cancelMedia, stopWaitingMedia, generate };
 }

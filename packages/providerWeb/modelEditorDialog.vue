@@ -79,7 +79,7 @@
           <el-divider contentPosition="left">{{ zealmanWorkflowId ? "Zealman 工作流参数映射" : "ComfyUI 工作流节点映射" }}</el-divider>
           <el-form-item v-if="zealmanWorkflowId" label="Zealman workflow_id"><el-input :modelValue="zealmanWorkflowId" readonly /></el-form-item>
           <p class="comfyMappingHint">把 Toonflow 的输入映射到 API 工作流中的可编辑节点参数；连线输入不会出现在列表中。</p>
-          <el-form-item label="正向提示词">
+          <el-form-item :label="zealmanWorkflowId === u17WorkflowId ? '正向提示词（工作流未提供参数时可留空）' : '正向提示词'">
             <el-select v-model="mappingDraft.prompt" clearable filterable aria-label="正向提示词节点映射">
               <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
             </el-select>
@@ -90,8 +90,22 @@
             </el-select>
           </el-form-item>
           <div v-if="draft.videoMode.includes('multiReference') && draft.mixedMode.includes('imageReference')">
-            <el-form-item v-for="index in imageReferenceCount" :key="index" :label="`图${index} → ${imageReferenceLabel(index - 1)}`">
+            <el-form-item v-for="index in imageReferenceCount" :key="index" :label="`图${index} → ${referenceInputLabel('image', index - 1)}`">
               <el-select v-model="mappingDraft.referenceImages[index - 1]" clearable filterable :aria-label="`参考图 ${index} 节点映射`">
+                <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <div v-if="zealmanWorkflowId && draft.videoMode.includes('multiReference') && draft.mixedMode.includes('videoReference')">
+            <el-form-item v-for="index in videoReferenceCount" :key="index" :label="`视频${index} → ${referenceInputLabel('video', index - 1)}`">
+              <el-select v-model="mappingDraft.referenceVideos[index - 1]" clearable filterable :aria-label="`参考视频 ${index} 节点映射`">
+                <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <div v-if="zealmanWorkflowId && draft.videoMode.includes('multiReference') && draft.mixedMode.includes('audioReference')">
+            <el-form-item v-for="index in audioReferenceCount" :key="index" :label="`音频${index} → ${referenceInputLabel('audio', index - 1)}`">
+              <el-select v-model="mappingDraft.referenceAudios[index - 1]" clearable filterable :aria-label="`参考音频 ${index} 节点映射`">
                 <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
               </el-select>
             </el-form-item>
@@ -104,6 +118,25 @@
             </el-form-item>
             <el-form-item label="尾帧">
               <el-select v-model="mappingDraft.lastFrame" clearable filterable aria-label="尾帧节点映射">
+                <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <div v-if="zealmanWorkflowId === u17WorkflowId" class="frameMapping">
+            <el-form-item label="画幅比例参数（可选）">
+              <el-select v-model="mappingDraft.aspectRatio" clearable filterable aria-label="画幅比例参数映射">
+                <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="生成像素量参数（可选）">
+              <el-select v-model="mappingDraft.megapixels" clearable filterable aria-label="生成像素量参数映射">
+                <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <div v-if="zealmanWorkflowId === u17WorkflowId" class="frameMapping">
+            <el-form-item label="放大倍率参数（可选）">
+              <el-select v-model="mappingDraft.upscale" clearable filterable aria-label="放大倍率参数映射">
                 <el-option v-for="item in workflowInputOptions" :key="item.value" :value="item.value" :label="item.label" />
               </el-select>
             </el-form-item>
@@ -222,9 +255,11 @@ let initialDraft = createDraft();
 let initialExtraMode: unknown;
 type ComfyNode = { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } };
 type ComfyInputMapping = { nodeId: string; input: string };
+const u17WorkflowId = "API-U17-9图1视频3音频V1-api";
 type ComfyMapping = {
   prompt?: ComfyInputMapping; image?: ComfyInputMapping; firstFrame?: ComfyInputMapping; lastFrame?: ComfyInputMapping;
-  referenceImages?: ComfyInputMapping[];
+  referenceImages?: ComfyInputMapping[]; referenceVideos?: ComfyInputMapping[]; referenceAudios?: ComfyInputMapping[];
+  aspectRatio?: ComfyInputMapping; megapixels?: ComfyInputMapping; upscale?: ComfyInputMapping;
   width?: ComfyInputMapping; height?: ComfyInputMapping; resolution?: ComfyInputMapping; duration?: ComfyInputMapping; fps?: ComfyInputMapping;
   durationUnit?: "seconds" | "frames"; frameRate?: number; outputNodeIds?: string[];
 };
@@ -232,8 +267,8 @@ const workflowNodes = ref<Record<string, ComfyNode>>();
 const zealmanWorkflowId = ref("");
 const zealmanInputs = ref<Record<string, unknown>>();
 const mappingDraft = ref({
-  prompt: "", image: "", firstFrame: "", lastFrame: "", width: "", height: "", resolution: "", duration: "", fps: "",
-  referenceImages: [] as string[],
+  prompt: "", image: "", firstFrame: "", lastFrame: "", width: "", height: "", resolution: "", aspectRatio: "", megapixels: "", upscale: "", duration: "", fps: "",
+  referenceImages: [] as string[], referenceVideos: [] as string[], referenceAudios: [] as string[],
   durationUnit: "" as "" | "seconds" | "frames", frameRate: undefined as number | undefined, outputNodeIds: [] as string[],
 });
 const workflowInputOptions = computed(() => Object.entries(workflowNodes.value ?? {}).flatMap(([nodeId, node]) => Object.entries(node.inputs)
@@ -243,16 +278,22 @@ const workflowInputOptions = computed(() => Object.entries(workflowNodes.value ?
 const workflowOutputOptions = computed(() => Object.entries(workflowNodes.value ?? {}).filter(([, node]) => /save|video|combine/i.test(node.class_type))
   .map(([nodeId, node]) => ({ value: nodeId, label: `#${nodeId} · ${node._meta?.title || node.class_type}` })));
 const imageReferenceCount = computed(() => Number(draft.value.mixedModeCount.imageReference) || 0);
-function imageReferenceLabel(index: number) {
-  const key = `ref_image_${index}`;
-  return zealmanInputs.value && Object.hasOwn(zealmanInputs.value, key) ? key : "选择工作流图片参数";
+const videoReferenceCount = computed(() => Number(draft.value.mixedModeCount.videoReference) || 0);
+const audioReferenceCount = computed(() => Number(draft.value.mixedModeCount.audioReference) || 0);
+function referenceInputLabel(mediaType: "image" | "video" | "audio", index: number) {
+  const key = `ref_${mediaType}_${index}`;
+  const labels = { image: "图片", video: "视频", audio: "音频" };
+  return zealmanInputs.value && Object.hasOwn(zealmanInputs.value, key) ? key : `选择工作流${labels[mediaType]}参数`;
 }
-watch([imageReferenceCount, zealmanInputs], ([count, inputs]) => {
+watch([imageReferenceCount, videoReferenceCount, audioReferenceCount, zealmanInputs], ([imageCount, videoCount, audioCount, inputs]) => {
   if (!inputs) return;
-  for (let index = 0; index < count; index++) {
-    const key = `ref_image_${index}`;
-    if (!mappingDraft.value.referenceImages[index] && Object.hasOwn(inputs, key)) {
-      mappingDraft.value.referenceImages[index] = encodeMapping({ nodeId: "input_values", input: key });
+  for (const [mediaType, count, field] of [["image", imageCount, "referenceImages"], ["video", videoCount, "referenceVideos"], ["audio", audioCount, "referenceAudios"]] as const) {
+    const targets = mappingDraft.value[field];
+    const keys = Object.keys(inputs).map(input => ({ input, match: new RegExp(`^ref_${mediaType}_(\\d+)$`).exec(input) }))
+      .filter((item): item is { input: string; match: RegExpExecArray } => !!item.match)
+      .sort((left, right) => Number(left.match[1]) - Number(right.match[1]));
+    for (let index = 0; index < Math.min(count, keys.length); index++) {
+      if (!targets[index]) targets[index] = encodeMapping({ nodeId: "input_values", input: keys[index]!.input });
     }
   }
 });
@@ -321,9 +362,12 @@ watch(visible, (isVisible) => {
     prompt: encodeMapping(comfyMapping.prompt) || (zealmanInputs.value && Object.hasOwn(zealmanInputs.value, "prompt")
       ? encodeMapping({ nodeId: "input_values", input: "prompt" }) : ""), image: encodeMapping(comfyMapping.image),
     referenceImages: Array.isArray(comfyMapping.referenceImages) ? comfyMapping.referenceImages.map(encodeMapping) : [],
+    referenceVideos: Array.isArray(comfyMapping.referenceVideos) ? comfyMapping.referenceVideos.map(encodeMapping) : [],
+    referenceAudios: Array.isArray(comfyMapping.referenceAudios) ? comfyMapping.referenceAudios.map(encodeMapping) : [],
     firstFrame: encodeMapping(comfyMapping.firstFrame), lastFrame: encodeMapping(comfyMapping.lastFrame),
     width: encodeMapping(comfyMapping.width), height: encodeMapping(comfyMapping.height),
-    resolution: encodeMapping(comfyMapping.resolution), duration: encodeMapping(comfyMapping.duration),
+    resolution: encodeMapping(comfyMapping.resolution), aspectRatio: encodeMapping(comfyMapping.aspectRatio),
+    megapixels: encodeMapping(comfyMapping.megapixels), upscale: encodeMapping(comfyMapping.upscale), duration: encodeMapping(comfyMapping.duration),
     fps: encodeMapping(comfyMapping.fps), durationUnit: comfyMapping.durationUnit === "seconds" ? "seconds" : comfyMapping.durationUnit === "frames" ? "frames" : zealmanWorkflowId.value ? "" : "frames",
     frameRate: typeof comfyMapping.frameRate === "number" && Number.isFinite(comfyMapping.frameRate) ? comfyMapping.frameRate : zealmanWorkflowId.value ? undefined : 24,
     outputNodeIds: Array.isArray(comfyMapping.outputNodeIds) ? comfyMapping.outputNodeIds.filter((item): item is string => typeof item === "string") : [],
@@ -353,11 +397,22 @@ function confirmModel() {
         frameRate: mappingDraft.value.frameRate,
         outputNodeIds: [...mappingDraft.value.outputNodeIds],
       };
-      for (const field of ["prompt", "image", "firstFrame", "lastFrame", "width", "height", "resolution", "duration", "fps"] as const) {
+      for (const field of ["prompt", "image", "firstFrame", "lastFrame", "width", "height", "resolution", "aspectRatio", "megapixels", "upscale", "duration", "fps"] as const) {
         const selected = resolveMapping(mappingDraft.value[field]);
         if (selected) comfyMapping[field] = selected;
       }
-      if (draft.value.type === "video" && draft.value.videoMode.includes("multiReference") && draft.value.mixedMode.includes("imageReference")) {
+      if (zealmanWorkflowId.value) {
+        for (const [reference, field, count] of [
+          ["imageReference", "referenceImages", imageReferenceCount.value],
+          ["videoReference", "referenceVideos", videoReferenceCount.value],
+          ["audioReference", "referenceAudios", audioReferenceCount.value],
+        ] as const) {
+          const mappings = mappingDraft.value[field].map(resolveMapping);
+          if (draft.value.videoMode.includes("multiReference") && draft.value.mixedMode.includes(reference)
+            && mappings.slice(0, count).some(item => !item)) throw new Error(`请为全部${referenceModes.find(item => item.value === reference)?.label}选择工作流参数`);
+          comfyMapping[field] = mappings.filter((item): item is ComfyInputMapping => !!item);
+        }
+      } else if (draft.value.type === "video" && draft.value.videoMode.includes("multiReference") && draft.value.mixedMode.includes("imageReference")) {
         comfyMapping.referenceImages = Array.from({ length: imageReferenceCount.value }, (_, index) => {
           const selected = resolveMapping(mappingDraft.value.referenceImages[index] ?? "");
           if (!selected) throw new Error(`请为参考图 ${index + 1} 选择工作流图片参数`);
@@ -373,7 +428,19 @@ function confirmModel() {
         value.zealmanInputs = zealmanInputs.value;
       } else value.comfyWorkflow = workflowNodes.value;
       value.comfyMapping = comfyMapping;
-      if (!comfyMapping.prompt) throw new Error("请为此工作流选择正向提示词节点参数");
+      const hasZealmanPrompt = !!zealmanWorkflowId.value && !!zealmanInputs.value && Object.hasOwn(zealmanInputs.value, "prompt");
+      if (zealmanWorkflowId.value) {
+        const promptMapping = comfyMapping.prompt;
+        const promptValue = promptMapping?.nodeId === "input_values" ? zealmanInputs.value?.[promptMapping.input] : undefined;
+        if (!promptMapping || typeof promptValue !== "string") throw new Error("请为此工作流选择有效的文本提示词参数映射");
+        if (zealmanWorkflowId.value === u17WorkflowId && (!hasZealmanPrompt || promptMapping.input !== "prompt")) {
+          throw new Error("U17 工作流必须包含并映射 input_values.prompt");
+        }
+      } else {
+        const promptMapping = comfyMapping.prompt;
+        const promptValue = promptMapping && workflowNodes.value?.[promptMapping.nodeId]?.inputs[promptMapping.input];
+        if (typeof promptValue !== "string") throw new Error("请为此工作流选择有效的文本提示词节点参数");
+      }
       if (zealmanWorkflowId.value && comfyMapping.duration && !comfyMapping.durationUnit) throw new Error("请按实际工作流选择时长单位");
       if (zealmanWorkflowId.value && (comfyMapping.durationUnit === "frames" || comfyMapping.fps)
         && (!Number.isFinite(comfyMapping.frameRate) || !comfyMapping.frameRate || comfyMapping.frameRate <= 0)) throw new Error("请按实际工作流填写帧率");

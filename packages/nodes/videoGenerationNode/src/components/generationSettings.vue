@@ -2,8 +2,8 @@
   <el-popover v-model:visible="settingsVisible" trigger="click" placement="top-start" width="min(340px, calc(100vw - 24px))" :disabled="disabled" :showArrow="false" :popperStyle="{ padding: '14px' }">
     <template #reference>
       <el-button class="settingsButton" text size="small" :disabled="disabled" :aria-expanded="settingsVisible" aria-label="视频生成设置">
-        <span class="ratioShape" :style="ratioStyle(ratio)" aria-hidden="true" />
-        <span>{{ [ratio, resolution, duration ? `${duration}秒` : ''].filter(Boolean).join(' · ') }}</span>
+        <span class="ratioShape" :style="ratioStyle(displayRatio)" aria-hidden="true" />
+        <span>{{ [displayRatio, hasModelAspectRatio && other.megapixels !== undefined ? `${other.megapixels} MP` : '', hasModelAspectRatio && other.upscale !== undefined ? `${other.upscale}×` : '', resolution, duration ? `${duration}秒` : ''].filter(Boolean).join(' · ') }}</span>
         <component :is="settingsVisible ? IconChevronDown : IconChevronUp" :size="14" aria-hidden="true" />
       </el-button>
     </template>
@@ -26,14 +26,16 @@
           </el-select>
         </div>
       </div>
-      <div class="sectionLabel">通用比例</div>
-      <div class="ratioOptions" role="group" aria-label="视频比例">
-        <el-button v-for="item in ratios" :key="item" class="ratioButton" :disabled="disabled" :aria-label="`比例 ${item}`" :aria-pressed="ratio === item" @click="ratio = item">
-          <span class="ratioContent">
-            <span class="ratioShape" :style="ratioStyle(item)" aria-hidden="true" />
-            <span>{{ item }}</span>
-          </span>
-        </el-button>
+      <div v-if="!hasModelAspectRatio" class="ratioSection">
+        <div class="sectionLabel">通用比例</div>
+        <div class="ratioOptions" role="group" aria-label="视频比例">
+          <el-button v-for="item in ratios" :key="item" class="ratioButton" :disabled="disabled" :aria-label="`比例 ${item}`" :aria-pressed="ratio === item" @click="ratio = item">
+            <span class="ratioContent">
+              <span class="ratioShape" :style="ratioStyle(item)" aria-hidden="true" />
+              <span>{{ item }}</span>
+            </span>
+          </el-button>
+        </div>
       </div>
       <div v-if="model?.audio === 'optional'" class="audioOption">
         <span class="sectionLabel">生成音频</span>
@@ -59,6 +61,8 @@ const ratio = defineModel<string>("ratio", { required: true });
 const mode = defineModel<string>("mode", { required: true });
 const generateAudio = defineModel<boolean>("generateAudio", { required: true });
 const other = defineModel<Record<string, unknown>>("other", { required: true });
+const hasModelAspectRatio = computed(() => props.model?.providerId === "autodlComfyUi" && (props.model.rules?.some(item => item.field === "aspectRatio") ?? false));
+const displayRatio = computed(() => hasModelAspectRatio.value && typeof other.value.aspectRatio === "string" && other.value.aspectRatio ? other.value.aspectRatio : ratio.value);
 const modeLabels: Record<string, string> = {
   text: "文生视频", singleImage: "单图参考", startEndRequired: "首尾帧必填", endFrameOptional: "尾帧可选", startFrameOptional: "首帧可选",
 };
@@ -75,7 +79,9 @@ function resolutionsFor(value: number | undefined) {
 }
 
 function ratioStyle(value: string) {
-  const [width = 1, height = 1] = value.split(":").map(Number);
+  const [, widthValue, heightValue] = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)/.exec(value) ?? [];
+  const width = Number(widthValue) || 1;
+  const height = Number(heightValue) || 1;
   return { width: `${16 * Math.min(width / height, 1)}px`, height: `${16 * Math.min(height / width, 1)}px` };
 }
 </script>

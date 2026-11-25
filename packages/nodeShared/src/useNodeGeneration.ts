@@ -15,6 +15,9 @@ export type NodeGenerationTask = {
   providerId: string;
   modelId: string;
   state: "submitting" | NonNullable<NodeMediaTaskStatus["state"]>;
+  stage?: NodeMediaTaskStatus["stage"];
+  startedAt?: number;
+  lastError?: string;
   resumable?: boolean;
   providerData?: unknown;
   recoveryData?: unknown;
@@ -38,10 +41,32 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
   let attemptedTaskId = "";
   const status = ref<"idle" | "running" | "succeeded" | "failed">("idle");
   const error = ref("");
+  const now = ref(Date.now());
   const cancelling = ref(false);
   const generating = computed(() => status.value === "running");
+  const elapsedSeconds = computed(() => generating.value ? Math.max(0, Math.floor((now.value - (savedData.value.mediaTask?.startedAt ?? now.value)) / 1000)) : 0);
+  const generationStage = computed(() => {
+    if (recovering) return "恢复任务";
+    const stage = savedData.value.mediaTask?.stage;
+    return stage ? ({ uploading: "上传素材", submitting: "提交任务", waiting: "等待云端生成", downloading: "下载结果", recovering: "恢复任务" } as const)[stage]
+      : !savedData.value.mediaTask || savedData.value.mediaTask?.state === "submitting" ? "准备请求" : "等待云端生成";
+  });
+  const generationError = computed(() => error.value || savedData.value.mediaTask?.lastError || "");
+  let elapsedTimer: ReturnType<typeof setInterval> | undefined;
+  watch(generating, active => {
+    if (elapsedTimer) clearInterval(elapsedTimer);
+    elapsedTimer = active ? setInterval(() => { now.value = Date.now(); }, 1000) : undefined;
+    now.value = Date.now();
+  }, { immediate: true });
   const pendingRecovery = computed(() => !generating.value && needsRecovery());
+  const cloudTaskAwaiting = computed(() => savedData.value.mediaTask?.providerId === "autodlComfyUi" && needsRecovery());
+  const cloudTaskNeedsManualConfirmation = computed(() => cloudTaskAwaiting.value && savedData.value.mediaTask?.state === "interrupted" && savedData.value.mediaTask.resumable === false);
+  const taskMessage = computed(() => !cloudTaskAwaiting.value ? ""
+    : savedData.value.mediaTask?.state === "succeeded"
+      ? "AutoDL 任务已完成，复查原任务可恢复视频结果。"
+      : "AutoDL 云端任务尚未确认结束。停止按钮只结束 Toonflow 本地等待；请复查原任务，确认结束前不能重新提交。");
   const getStatus = () => ({ status: status.value, outputs: outputs.value, ...(error.value ? { error: error.value } : {}),
+    ...(taskMessage.value ? { message: taskMessage.value } : {}),
     ...(savedData.value.mediaTask ? { task: { taskId: savedData.value.mediaTask.taskId, state: savedData.value.mediaTask.state, resumable: savedData.value.mediaTask.resumable } } : {}) });
 
   nodeTools.register({
@@ -52,7 +77,7 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
   });
   nodeTools.register({
     name: "cancelGeneration",
-    description: "明确放弃当前任务并停止等待，允许之后重新生成；结果未知时须先核对供应商任务。cancellationRequested 表示已发出停止请求，不会删除已有输出，不能保证供应商撤销任务或费用",
+    description: "停止当前生成等待。AutoDL 仅停止 Toonflow 本地轮询，云端任务可能仍在运行；须复查或明确确认云端任务结束后才能重新提交。其他供应商沿用现有取消流程。",
     parameters: z.strictObject({}),
     async execute() {
       const cancellationRequested = generating.value || needsRecovery();
@@ -80,20 +105,27 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
       taskId: task.taskId, nodeId: id, canvasPath: task.canvasPath,
       isCancelled: () => task.state === "cancelled",
       async onStatus(value: NodeMediaTaskStatus) {
+        signal.throwIfAborted();
         checkTask(task, context);
         if (value.nodeId && value.nodeId !== id) throw new Error("生成任务不属于当前节点");
         if (value.canvasPath && value.canvasPath !== task.canvasPath) throw new Error("生成任务的原画布归属不一致");
-        const before = JSON.stringify([task.state, task.resumable, task.providerData]);
+        const before = JSON.stringify([task.state, task.resumable, task.providerData, task.stage, task.startedAt, task.lastError]);
         if (value.state) task.state = value.state;
+        if (value.stage) task.stage = value.stage;
+        if (value.createdAt && !task.startedAt) task.startedAt = value.createdAt;
+        if (value.state === "failed") task.lastError = value.result?.message || "生成失败";
         if (value.resumable !== undefined) task.resumable = value.resumable;
         if (value.providerData !== undefined) task.providerData = value.providerData;
-        if (before !== JSON.stringify([task.state, task.resumable, task.providerData])) {
+        if (before !== JSON.stringify([task.state, task.resumable, task.providerData, task.stage, task.startedAt, task.lastError])) {
           const current = getPersistence?.();
           if (!current) throw new Error("画布已关闭，无法保存任务状态");
           await current.save(signal);
         }
         if (task.state === "interrupted" && task.resumable === false) {
-          throw new Error([value.result?.message, "上次生成结果未知，可能已接单或扣费。请先核对供应商任务；如需重新生成，请点击“放弃任务”。"].filter(Boolean).join("\n"));
+          const nextStep = task.providerId === "autodlComfyUi"
+            ? "云端任务状态未知。请先在 AutoDL 核对任务；确认云端任务结束后，才能允许此节点重新提交。"
+            : "上次生成结果未知，可能已接单或扣费。请先核对供应商任务；如需重新生成，请点击“放弃任务”。";
+          throw new Error([value.result?.message, nextStep].filter(Boolean).join("\n"));
         }
       },
     };
@@ -106,7 +138,7 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
     if (!context || context.directory !== input.directory) throw new Error("画布尚未就绪，无法保存生成任务");
     let task: NodeGenerationTask = {
       taskId: crypto.randomUUID(), directory: context.directory, canvasPath: context.canvasPath, nodeId: id,
-      mediaType, providerId: input.providerId, modelId: input.modelId, state: "submitting",
+      mediaType, providerId: input.providerId, modelId: input.modelId, state: "submitting", startedAt: Date.now(),
       ...(recoveryData === undefined ? {} : { recoveryData: JSON.parse(JSON.stringify(recoveryData)) }),
     };
     savedData.value.mediaTask = task;
@@ -153,6 +185,7 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
     if (generating.value) throw new Error("节点正在生成，请等待完成");
     const controller = executionController = new AbortController();
     status.value = "running";
+    now.value = Date.now();
     error.value = "";
     try {
       const result = await action();
@@ -203,26 +236,49 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
   async function cancelGeneration(persist = true) {
     if (cancelling.value) throw new Error("任务正在取消，请稍后重试");
     cancelling.value = true;
+    let localSaveError: unknown;
     try {
-      const task = savedData.value.mediaTask;
-      const context = getPersistence?.();
-      if (options && task && needsRecovery()) {
-        if (!context) throw new Error("工作区已变化，无法取消此节点任务");
-        // ACT: 项目移动后的旧任务仅在当前节点放弃，不请求原目录的后台任务。
-        if (task.directory === context.directory) await options.ai.cancelMedia(task.directory, task.taskId);
+      const originalTask = savedData.value.mediaTask;
+      const originalContext = getPersistence?.();
+      if (options && originalTask && needsRecovery()) {
+        if (!originalContext) throw new Error("工作区已变化，无法取消此节点任务");
         const current = getPersistence?.();
-        if (savedData.value.mediaTask?.taskId === task.taskId && current?.directory === context.directory && findNode(id) === node) {
-          const { state, resumable } = task;
-          task.state = "cancelled";
-          task.resumable = false;
-          try { if (persist) await current.save(); }
-          catch (error) { task.state = state; task.resumable = resumable; throw error; }
+        if (savedData.value.mediaTask?.taskId === originalTask.taskId && current?.directory === originalContext.directory && findNode(id) === node) {
+          if (originalTask.providerId === "autodlComfyUi") {
+            if (!["succeeded", "failed", "cancelled"].includes(originalTask.state)) originalTask.state = "interrupted";
+            if (persist) {
+              try { await current.save(); }
+              catch (error) { localSaveError = error; }
+            }
+          } else {
+            // ACT: 项目移动后的旧任务仅在当前节点放弃，不请求原目录的后台任务。
+            if (originalTask.directory === originalContext.directory) await options.ai.cancelMedia(originalTask.directory, originalTask.taskId);
+            const { state, resumable } = originalTask;
+            originalTask.state = "cancelled";
+            originalTask.resumable = false;
+            try { if (persist) await current.save(); }
+            catch (error) { originalTask.state = state; originalTask.resumable = resumable; throw error; }
+          }
         }
       }
       recoveryController?.abort();
       executionController?.abort();
-      cancel();
+      await cancel();
       await recovering?.catch(() => {});
+      const currentTask = savedData.value.mediaTask;
+      const currentContext = getPersistence?.();
+      if (options && currentTask?.providerId === "autodlComfyUi" && currentTask.directory === currentContext?.directory) {
+        const stopped = await options.ai.stopWaitingMedia(currentTask.directory, currentTask.taskId);
+        if (savedData.value.mediaTask?.taskId === currentTask.taskId && currentContext && getPersistence?.()?.directory === currentContext.directory) {
+          currentTask.state = stopped.state ?? "interrupted";
+          currentTask.resumable = stopped.resumable;
+          if (stopped.providerData !== undefined) currentTask.providerData = stopped.providerData;
+          await currentContext.save();
+          localSaveError = undefined;
+        }
+        error.value = taskMessage.value;
+      }
+      if (localSaveError) throw localSaveError;
     } finally {
       cancelling.value = false;
     }
@@ -238,7 +294,21 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
     // 保留用户替换或编辑的输出；未决任务仍须复查完成或明确放弃，不能借此重新提交。
     if (!generating.value && needsRecovery() && savedData.value.mediaTask) savedData.value.mediaTask.applied = true;
   }, { deep: true, flush: "sync" });
-  onScopeDispose(() => lifetime.abort());
+  onScopeDispose(() => { lifetime.abort(); if (elapsedTimer) clearInterval(elapsedTimer); });
 
-  return { generating, pendingRecovery, cancelling, run, generate, resume, cancel: cancelGeneration };
+  async function confirmCloudTaskEnded() {
+    const task = savedData.value.mediaTask;
+    const context = getPersistence?.();
+    if (!task || task.providerId !== "autodlComfyUi" || task.state !== "interrupted" || task.resumable !== false || !context) {
+      throw new Error("当前 AutoDL 任务还不能确认结束，请先复查任务状态");
+    }
+    task.state = "failed";
+    task.resumable = false;
+    task.applied = true;
+    await context.save();
+    error.value = "";
+  }
+
+  return { generating, pendingRecovery, cancelling, cloudTaskAwaiting, cloudTaskNeedsManualConfirmation, taskMessage,
+    generationStage, generationError, elapsedSeconds, run, generate, resume, cancel: cancelGeneration, confirmCloudTaskEnded };
 }

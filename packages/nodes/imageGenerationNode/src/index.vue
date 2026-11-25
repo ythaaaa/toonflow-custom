@@ -23,7 +23,7 @@
     <template #topRightActions>
       <el-button :icon="IconPencil" :disabled="generating || deleting || uploading || lighting?.generating || multiAngle?.generating || panorama?.busy || !previewUrl || gridSplit?.splitting" text title="标记" aria-label="标记" @click.stop="startEditor('mark')" />
     </template>
-    <div v-loading="generating || uploading" class="imageContent nopan" :aria-busy="generating || uploading">
+    <div v-loading="uploading" class="imageContent nopan" :aria-busy="generating || uploading">
       <imageEditor
         v-if="previewUrl"
         ref="editor"
@@ -40,6 +40,7 @@
       <div v-else class="imageEmpty" role="img" aria-label="暂无生成图片">
         <icon-photo-ai :size="48" stroke="1.25" aria-hidden="true" />
       </div>
+      <generationStatus :active="generating" :stage="generationStage" :elapsed="elapsedSeconds" :error="generationError" />
     </div>
     <template v-if="editor?.mode !== 'mark'" #bottom>
       <div v-if="lightingVisible" ref="lightingTarget" />
@@ -126,6 +127,7 @@ import { getMediaMimeType } from "@toonflow/node-shared/mediaTypes";
 import modelLabel from "@toonflow/node-shared/modelLabel";
 import { showNodeError } from "@toonflow/node-shared/showNodeError";
 import { useNodeGeneration } from "@toonflow/node-shared/useNodeGeneration";
+import generationStatus from "@toonflow/node-shared/generationStatus";
 import { useNodeReferences } from "@toonflow/node-shared/useNodeReferences";
 import { getModelFormValues, useImageModelForm } from "@toonflow/node-shared/useModelForm";
 import promptInput from "@toonflow/node-shared/promptInput";
@@ -194,7 +196,7 @@ const generationState = useNodeGeneration(outputs, () => generationController?.a
     return generateInpaint(recovery.input, recovery.inpaint, signal, results.filter(result => result.mediaType === "image"));
   },
 });
-const { generating, pendingRecovery, cancelling } = generationState;
+const { generating, pendingRecovery, cancelling, generationStage, generationError, elapsedSeconds } = generationState;
 let generation: Promise<void> | undefined;
 let modelsRequest: Promise<void> | undefined;
 watch(generating, value => { if (!value && !disposed && !deleting.value && !models.value.length) void loadModels().catch(error => showNodeError(error, "模型读取失败")); });
@@ -214,11 +216,11 @@ const generationInput = computed<Omit<NodeImageRequest, "directory"> | undefined
   if (!choice) return;
   const inpaint = data.value.inpaint;
   const references = refList.value.filter(item => !inpaint || item.dataType !== "IMAGE" || item.value?.url !== inpaint.source);
-  const input = {
+  const input: Omit<NodeImageRequest, "directory"> = {
     ...getNodeModelIdentity(choice),
     prompt: generationPrompt.value,
     size: data.value.size,
-    ratio: data.value.ratio,
+    ...(choice.imageRatios?.length ? { ratio: data.value.ratio } : {}),
     other: Object.keys(data.value.other).length ? { ...data.value.other } : undefined,
     outputDirectory: `assets/${id}`,
     images: references.flatMap(item => item.dataType === "IMAGE" && item.value ? [{ path: item.value.url, mimeType: item.value.mimeType }] : []),
@@ -440,7 +442,7 @@ function getConfig() {
 
 nodeTools.register({
   name: "getConfig",
-  description: "读取此图片生成节点的当前模型、分辨率、比例、自定义配置 other 及可选图片模型能力，models 中的 rules 声明自定义字段，不含密钥；未声明分辨率或比例时分别使用 2K、16:9",
+  description: "读取此图片生成节点的当前模型、分辨率、比例、自定义配置 other 及可选图片模型能力；models 中的 imageSizes、imageRatios 与 rules 声明当前模型支持项，不含密钥",
   parameters: z.strictObject({}),
   async execute(_args, { signal }) {
     signal?.throwIfAborted();
@@ -470,7 +472,7 @@ nodeTools.register({
       : findNodeModel(models.value, { providerId: args.providerId ?? "", modelId: args.modelId });
     if (!choice) throw new Error("请选择 getConfig 返回的有效图片模型");
     const sizes = choice.imageSizes?.length ? choice.imageSizes : ["2K"];
-    const ratios = choice.imageRatios?.length ? choice.imageRatios : ["16:9"];
+    const ratios = choice.imageRatios ?? ["16:9"];
     if (args.size !== undefined && !sizes.includes(args.size)) throw new Error(`当前模型不支持分辨率 ${args.size}，可选：${sizes.join("、")}`);
     if (args.ratio !== undefined && !ratios.includes(args.ratio)) throw new Error(`当前模型不支持比例 ${args.ratio}，可选：${ratios.join("、")}`);
     const other = getModelFormValues(choice, choice === selectedModel.value ? data.value.other : {}, args.other);

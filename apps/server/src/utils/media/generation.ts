@@ -16,6 +16,7 @@ import { modelGateway } from "@/utils/multiTenant/gateway";
 const maxMediaSize = 100 * 1024 * 1024;
 export type MediaGenerationCheckpoint = {
   providerData?: ProviderTaskData;
+  stage?: "uploading" | "submitting" | "waiting" | "downloading" | "recovering";
   assets?: Extract<MediaAsset, { type: "url" }>[];
   assetCount?: number;
   files?: (GeneratedMedia & { index: number; hash: string })[];
@@ -68,11 +69,17 @@ export async function listMediaModels(): Promise<MediaModel[]> {
   return installedProviders.filter(provider => provider.id !== "toonflow" || !!getAccountProvider()).flatMap(provider => provider.models.flatMap(model => {
     if (model.type !== "image" && model.type !== "video" && model.type !== "audio") return [];
     const builtIn = (mediaProviders as readonly Provider[]).find(item => item.id === provider.id)?.models.find(item => item.id === model.id);
+    const workflow = model as typeof model & { zealmanWorkflowId?: unknown; zealmanInputs?: unknown; comfyMapping?: { prompt?: { nodeId?: string; input?: string } } };
+    const preservePromptWhitespace = provider.id === "autodlComfyUi" && model.type === "video"
+      && workflow.zealmanWorkflowId === "API-U17-9图1视频3音频V1-api"
+      && record(workflow.zealmanInputs).prompt !== undefined && workflow.comfyMapping?.prompt?.nodeId === "input_values"
+      && workflow.comfyMapping.prompt.input === "prompt";
     return [{
       providerId: provider.id, providerLabel: provider.label, modelId: model.id, label: model.label, type: model.type,
       supportsPrice: "supportsPrice" in provider && provider.supportsPrice === true,
       rules: model.rules,
       mode: model.mode, durationResolutionMap: model.durationResolutionMap, audio: model.audio,
+      ...(preservePromptWhitespace ? { preservePromptWhitespace: true } : {}),
       ...(model.type === "audio" ? { voices: model.voices } : {}),
       ...(model.type === "image" ? {
         imageSizes: imageOptions(Array.isArray(model.imageSizes) ? model.imageSizes : builtIn?.imageSizes, /^[^\u0000-\u001f\u007f]+$/),
@@ -200,7 +207,8 @@ async function prepareRequest<T>(directory: string | undefined, mediaType: "imag
 }
 
 async function configuredProvider(request: MediaGenerationRequest, mediaType: "image" | "video" | "audio", signal?: AbortSignal, directory?: string,
-  saveTaskData?: (data: ProviderTaskData) => Promise<void>, resume = false, modelRouteCipher?: string) {
+  saveTaskData?: (data: ProviderTaskData) => Promise<void>, resume = false, modelRouteCipher?: string,
+  reportStage?: (stage: NonNullable<MediaGenerationCheckpoint["stage"]>) => Promise<void>, markRemoteSubmit?: () => void) {
   if (modelGateway.enabled() || modelRouteCipher) {
     const { upstream } = await modelGateway.resolve(mediaType, request.providerId, request.modelId, modelRouteCipher, request);
     const provider = await loadMediaProviderSource(upstream.source, upstream.config, signal, undefined, directory, saveTaskData, upstream.cloud);
@@ -209,7 +217,14 @@ async function configuredProvider(request: MediaGenerationRequest, mediaType: "i
   const info = await getMediaProvider(request.providerId);
   if (!resume && !info.models.some(model => model.id === request.modelId && model.type === mediaType)) invalid("所选媒体模型不存在或类型不匹配，请重新选择");
   const configurations = record(conf.get("settings", {}).mediaProviderConfigs);
-  const provider = await loadMediaProviderSource(info.source, record(configurations[info.id]), signal, undefined, directory, saveTaskData);
+  const trackedFetch = info.id === "autodlComfyUi" && markRemoteSubmit
+    ? Object.assign((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+      const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+      if (method.toUpperCase() === "POST" && ["/api/workflow/generate", "/prompt"].includes(path)) markRemoteSubmit();
+      return fetch(input, init);
+    }, { preconnect: fetch.preconnect }) as typeof fetch : undefined;
+  const provider = await loadMediaProviderSource(info.source, record(configurations[info.id]), signal, trackedFetch, directory, saveTaskData, false, reportStage);
   return { provider, request };
 }
 
@@ -298,6 +313,7 @@ async function executeMedia(
   }
   let finish = () => {};
   const resumeAssets = async () => {
+    await task?.save({ stage: "recovering" });
     const { provider } = await configuredProvider(request, mediaType, signal, directory, data => task!.save({ providerData: data }), true, modelRouteCipher);
     if (!checkpoint?.providerData || !provider.resumeTask) invalid("该任务没有可恢复的供应商凭据，不能重新提交生成");
     requireGenerationMode(task);
@@ -315,7 +331,8 @@ async function executeMedia(
       assets = checkpoint?.assets ?? await resumeAssets();
     } else {
       const { provider, request: upstreamRequest } = await configuredProvider(request, mediaType, signal, directory,
-        task ? data => task.save({ providerData: data }) : undefined, false, modelRouteCipher);
+        task ? data => task.save({ providerData: data }) : undefined, false, modelRouteCipher,
+        task ? stage => task.save({ stage }) : undefined, markSubmitted);
       const generate = mediaType === "image" ? provider.generateImage : mediaType === "video" ? provider.generateVideo : provider.generateAudio;
       if (typeof generate !== "function") invalid(t`此供应商不支持${translateMessage({ image: "图片", video: "视频", audio: "音频" }[mediaType])}生成`);
       const rules = Array.isArray(provider.rules) ? provider.rules : [];
@@ -325,11 +342,12 @@ async function executeMedia(
       signal?.throwIfAborted();
       requireGenerationMode(task);
       if (!modelRouteCipher) finish = beginGeneration(provider);
-      markSubmitted();
+      if (provider.id !== "autodlComfyUi" || modelRouteCipher) markSubmitted();
       assets = type === "audio" ? await provider.generateAudio!(parameters as AudioRequest)
         : type === "image" ? await provider.generateImage!(parameters as ImageRequest) : await provider.generateVideo!(parameters as VideoRequest);
     }
     if (!Array.isArray(assets) || !assets.length) invalid("供应商未返回生成结果");
+    await task?.save({ stage: "downloading" });
     if (checkpoint?.assetCount !== undefined && checkpoint.assetCount !== assets.length) invalid("恢复任务的结果数量发生变化");
     // ACT: 只持久化下载地址；二进制直接落盘，避免把大媒体复制进任务 JSON。未落盘部分由 resumeTask 重新取回。
     await task?.save({ assetCount: assets.length, assets: resumableAssets(assets, mediaType) });

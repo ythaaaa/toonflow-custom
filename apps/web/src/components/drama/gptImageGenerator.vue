@@ -60,7 +60,7 @@ const emit = defineEmits<{
   useImage: [path: string];
 }>();
 
-const status = ref({ authenticated: false, email: "", expiresAt: null as number | null, model: "gpt-image-2.6-flare", aspectRatios: ["1:1", "16:9", "9:16"], quality: "auto" });
+const status = ref({ authenticated: false, email: "", expiresAt: null as number | null, model: "gpt-image-2", aspectRatios: ["1:1", "16:9", "9:16"], quality: "auto" });
 const statusState = ref<"loading" | "ready" | "error">("loading");
 const authBusy = ref(false);
 const generating = ref(false);

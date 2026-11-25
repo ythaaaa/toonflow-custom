@@ -30,7 +30,7 @@
         </template>
       </el-dropdown>
     </template>
-    <div v-loading="generating || uploading" class="videoContent nopan" :aria-busy="generating || uploading">
+    <div v-loading="uploading" class="videoContent nopan" :aria-busy="generating || uploading">
       <videoPlayer
         v-if="previewUrl"
         ref="player"
@@ -40,6 +40,7 @@
       <div v-else class="videoEmpty" role="img" aria-label="暂无生成视频">
         <icon-camera-ai :size="48" stroke="1.25" aria-hidden="true" />
       </div>
+      <generationStatus :active="generating" :stage="generationStage" :elapsed="elapsedSeconds" :error="generationError" />
     </div>
     <template #bottom>
       <el-card class="promptCard" shadow="never" :bodyStyle="{ padding: '14px 16px 12px' }">
@@ -89,15 +90,17 @@
             :disabled="generating || deleting || !selectedModel" />
           <div class="generationActions">
             <mediaPrice v-if="generationInput" :input="{ ...generationInput, mediaType: 'video' }" :supported="selectedModel?.supportsPrice === true" />
-            <el-button v-if="pendingRecovery" class="sendButton" :icon="IconPlayerStop" :loading="cancelling" :disabled="deleting || uploading" title="放弃任务" aria-label="放弃任务" @click="generationState.cancel().catch(error => showNodeError(error, '停止生成失败'))" />
+            <el-button v-if="cloudTaskNeedsManualConfirmation" text @click="confirmCloudTaskEnded">确认云端任务已结束</el-button>
+            <el-button v-else-if="pendingRecovery && !cloudTaskAwaiting" class="sendButton" :icon="IconPlayerStop" :loading="cancelling" :disabled="deleting || uploading" title="放弃任务" aria-label="放弃任务" @click="generationState.cancel().catch(error => showNodeError(error, '停止生成失败'))" />
             <el-button
               class="sendButton"
               :icon="generating ? IconPlayerStop : IconArrowUp"
-              :disabled="cancelling || deleting || uploading || (!generating && !pendingRecovery && (!generationPrompt || !selectedModel))"
-              :title="generating ? '停止生成' : pendingRecovery ? '复查任务' : '生成视频'"
-              :aria-label="generating ? '停止生成' : pendingRecovery ? '复查任务' : '生成视频'"
+              :disabled="cancelling || deleting || uploading || cloudTaskNeedsManualConfirmation || (!generating && !pendingRecovery && (!generationPrompt || !selectedModel))"
+              :title="generating ? cloudTaskAwaiting ? '停止 Toonflow 本地等待，AutoDL 云端任务可能继续运行' : '停止生成' : pendingRecovery ? '复查原任务' : '生成视频'"
+              :aria-label="generating ? cloudTaskAwaiting ? '停止 Toonflow 本地等待，AutoDL 云端任务可能继续运行' : '停止生成' : pendingRecovery ? '复查原任务' : '生成视频'"
               @click="generating ? generationState.cancel().catch(error => showNodeError(error, '停止生成失败')) : startGeneration().catch((error) => showNodeError(error, '视频生成失败'))" />
           </div>
+          <p v-if="cloudTaskAwaiting" class="taskNotice" role="status">{{ taskMessage }}</p>
         </div>
       </el-card>
     </template>
@@ -107,13 +110,14 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, ref, shallowRef, watch } from "vue";
-import { ElButton, ElCard, ElSelect, ElOption, ElOptionGroup, ElLoading, ElDropdown, ElDropdownMenu, ElDropdownItem } from "element-plus";
+import { ElButton, ElCard, ElSelect, ElOption, ElOptionGroup, ElLoading, ElDropdown, ElDropdownMenu, ElDropdownItem, ElMessageBox } from "element-plus";
 import { IconCameraAi, IconSparkles, IconArrowUp, IconPlayerStop, IconTransfer, IconMusic, IconLayersSubtract, IconScissors, IconMovie, IconPhotoScan, IconPlayerSkipBack, IconPlayerSkipForward } from "@tabler/icons-vue";
 import { findNodeModel, getNodeModelIdentity, getNodeModelKey, nodeSkeleton, nodeTools, useNode, useNodeModelSelection, z, type NodeMediaModel, type NodeVideoRequest, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 import { groupNodeModels } from "@toonflow/node-shared/groupNodeModels";
 import modelLabel from "@toonflow/node-shared/modelLabel";
 import { showNodeError } from "@toonflow/node-shared/showNodeError";
 import { useNodeGeneration } from "@toonflow/node-shared/useNodeGeneration";
+import generationStatus from "@toonflow/node-shared/generationStatus";
 import { getModelFormValues, useModelForm } from "@toonflow/node-shared/useModelForm";
 import { useNodeReferences } from "@toonflow/node-shared/useNodeReferences";
 import { getPromptText } from "@toonflow/node-shared/promptText";
@@ -160,9 +164,13 @@ const player = ref<InstanceType<typeof videoPlayer>>();
 const actions = ref<InstanceType<typeof videoActions>>();
 const videoWidth = ref(0);
 let generationController: AbortController | undefined;
-const generationState = useNodeGeneration(outputs, () => generationController?.abort(), { ai });
-const { generating, pendingRecovery, cancelling } = generationState;
 let generation: Promise<void> | undefined;
+const generationState = useNodeGeneration(outputs, async () => {
+  generationController?.abort();
+  await generation;
+}, { ai });
+const { generating, pendingRecovery, cancelling, cloudTaskAwaiting, cloudTaskNeedsManualConfirmation, taskMessage,
+  generationStage, generationError, elapsedSeconds } = generationState;
 let modelsRequest: Promise<void> | undefined;
 watch(generating, value => { if (!value && !disposed && !deleting.value && !models.value.length) void loadModels().catch(error => showNodeError(error, "模型读取失败")); });
 // ACT: 供应商未声明视频比例范围，沿用界面的通用比例，具体支持范围由供应商校验。
@@ -221,7 +229,8 @@ watch([selectedModel, () => data.value.duration], ([choice]) => {
   if (choice.audio !== "optional") data.value.generateAudio = choice.audio === true;
 }, { flush: "sync" });
 const modelGroups = computed(() => groupNodeModels(models.value));
-function getGenerationPrompt(prompt: string, references = refList.value) {
+function getGenerationPrompt(prompt: string, references = refList.value, preserveWhitespace = false) {
+  if (preserveWhitespace) return prompt;
   return [
     prompt.trim(),
     ...references.flatMap((item, index) => (item.dataType === "STRING" && item.value?.trim() ? [`参考 ${index + 1}：\n${item.value.trim()}`] : [])),
@@ -229,7 +238,7 @@ function getGenerationPrompt(prompt: string, references = refList.value) {
     .filter(Boolean)
     .join("\n\n");
 }
-const generationPrompt = computed(() => getGenerationPrompt(data.value.prompt));
+const generationPrompt = computed(() => getGenerationPrompt(data.value.prompt, refList.value, selectedModel.value?.preservePromptWhitespace));
 const generationInput = computed(() => getGenerationInput(data.value.prompt));
 
 function getGenerationInput(prompt: string): Omit<NodeVideoRequest, "directory"> | undefined {
@@ -258,7 +267,7 @@ function getGenerationInput(prompt: string): Omit<NodeVideoRequest, "directory">
   const lastFrame = frameMode.value ? images[selectedMode.value === "startFrameOptional" && images.length === 1 ? 0 : 1] : undefined;
   return {
     ...getNodeModelIdentity(choice),
-    prompt: getGenerationPrompt(prompt, references),
+    prompt: getGenerationPrompt(prompt, references, choice.preservePromptWhitespace),
     mode: selectedMode.value,
     duration: data.value.duration,
     resolution: data.value.resolution || undefined,
@@ -398,6 +407,19 @@ async function startGeneration() {
   return { status: "generating" };
 }
 
+async function confirmCloudTaskEnded() {
+  try {
+    await ElMessageBox.confirm(
+      "请先在 AutoDL 确认原任务已结束。此操作只解除本节点的重复提交保护，不会向云端发送取消请求；若原任务仍运行，继续生成可能产生额外 GPU 任务。",
+      "确认 AutoDL 任务结束",
+      { confirmButtonText: "已确认，解除保护", cancelButtonText: "返回核对", type: "warning" },
+    );
+    await generationState.confirmCloudTaskEnded();
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") showNodeError(error, "确认任务结束失败");
+  }
+}
+
 nodeEvent.on("save", (reason) => {
   if (reason === "reload" && (generating.value || uploading.value || deleting.value)) throw new Error("视频处理中，请完成后再刷新节点");
 });
@@ -406,6 +428,7 @@ nodeEvent.on("delete", async () => {
   deleting.value = true;
   try {
     await generationState.cancel(false);
+    if (cloudTaskAwaiting.value) throw new Error("AutoDL 云端任务尚未确认结束，已停止本地等待但保留此节点；请复查或确认任务结束后再删除");
     await generation;
     await files.removeNodeFiles();
   } finally {
@@ -548,6 +571,13 @@ nodeTools.register({
 }
 
 .promptCard {
+  .taskNotice {
+    margin: 10px 0 0;
+    color: var(--el-color-warning-dark-2);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
   .referenceHint {
     margin: 8px 0;
     color: var(--el-text-color-secondary);

@@ -3,9 +3,11 @@ export type DramaProductionStatus = "待制作" | "制作中" | "已完成";
 export type DramaWorkspaceFiles = {
   list(path?: string): Promise<{ entries: { name: string; path: string; type: "file" | "directory" }[] }>;
   readText(path: string): Promise<string>;
+  readTextSnapshot?(path: string): Promise<{ text: string; revision: string; encoding: "utf-8" | "utf-8-bom" | "utf-16le" | "utf-16be" }>;
   readJson<T = unknown>(path: string): Promise<T>;
   write(path: string, content: string | Blob | ArrayBuffer, exclusive?: boolean): Promise<void>;
   writeJson(path: string, content: unknown, exclusive?: boolean): Promise<void>;
+  writeTextSnapshot?(path: string, content: string, snapshot: { revision: string; encoding: "utf-8" | "utf-8-bom" | "utf-16le" | "utf-16be" }): Promise<string>;
   mkdir(path: string): Promise<void>;
   remove(path: string, recursive?: boolean): Promise<void>;
 };
@@ -42,6 +44,7 @@ export type DramaProjectEntry = { project: DramaProject; path: string; storage: 
 const legacyManifestPath = ".toonflow/drama/project.json";
 const dataPath = ".toonflow/drama";
 const projectIdPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+const projectRevisions = new WeakMap<DramaProject, string>();
 
 function isMissingError(error: unknown) {
   return error instanceof Error && /404|ENOENT|不存在/i.test(error.message);
@@ -97,8 +100,21 @@ function getProjectRoot(manifestPath: string) {
   return manifestPath === legacyManifestPath ? dataPath : manifestPath.replace(/\/project\.json$/, "");
 }
 
+export function cloneDramaProject(project: DramaProject) {
+  const copy = JSON.parse(JSON.stringify(project)) as DramaProject;
+  const revision = projectRevisions.get(project);
+  if (revision) projectRevisions.set(copy, revision);
+  return copy;
+}
+
+export function applyDramaProjectSnapshot(target: DramaProject, source: DramaProject) {
+  Object.assign(target, source);
+  const revision = projectRevisions.get(source);
+  if (revision) projectRevisions.set(target, revision);
+}
+
 function cloneProject(project: DramaProject) {
-  return JSON.parse(JSON.stringify(project)) as DramaProject;
+  return cloneDramaProject(project);
 }
 
 async function saveProjectSnapshot(files: DramaWorkspaceFiles, project: DramaProject, manifestPath: string) {
@@ -107,11 +123,15 @@ async function saveProjectSnapshot(files: DramaWorkspaceFiles, project: DramaPro
   validateProjectIdentity(snapshot, manifestPath);
   const stored = await files.readJson<DramaProject>(manifestPath);
   if (stored.id !== snapshot.id) throw new Error("项目稳定 ID 与磁盘记录不一致，已停止覆盖");
+  const revision = projectRevisions.get(project);
+  if (!revision || !files.writeTextSnapshot) throw new Error("无法确认短剧项目修订号，请重新加载项目后再保存");
   snapshot.updatedAt = new Date().toISOString();
-  await files.writeJson(manifestPath, snapshot);
+  const nextRevision = await files.writeTextSnapshot(manifestPath, `${JSON.stringify(snapshot, null, 2)}\n`, { revision, encoding: "utf-8" });
   const saved = await files.readJson<DramaProject>(manifestPath);
   if (JSON.stringify(saved) !== JSON.stringify(snapshot)) throw new Error("项目索引回读校验失败；磁盘内容已保留，请重新载入后再试");
-  Object.assign(project, snapshot);
+  projectRevisions.set(snapshot, nextRevision);
+  projectRevisions.set(project, nextRevision);
+  applyDramaProjectSnapshot(project, snapshot);
 }
 
 export async function readEpisodeScript(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, manifestPath = legacyManifestPath) {
@@ -171,7 +191,9 @@ export async function listDramaProjects(files: DramaWorkspaceFiles) {
   const names = new Set<string>();
   for (const path of paths) {
     try {
-      const project = normalizeDramaProject(await files.readJson<DramaProject>(path));
+      const fileSnapshot = await files.readTextSnapshot?.(path);
+      const project = normalizeDramaProject(fileSnapshot ? JSON.parse(fileSnapshot.text) as DramaProject : await files.readJson<DramaProject>(path));
+      if (fileSnapshot) projectRevisions.set(project, fileSnapshot.revision);
       validateProjectIdentity(project, path);
       if (ids.has(project.id)) throw new Error(`当前工作区存在重复的短剧项目 ID：${project.id}`);
       const name = project.name.trim().toLocaleLowerCase();
@@ -187,21 +209,26 @@ export async function listDramaProjects(files: DramaWorkspaceFiles) {
   return projects.sort((left, right) => right.project.updatedAt.localeCompare(left.project.updatedAt));
 }
 
-export async function saveEpisodeDraft(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, content: string, manifestPath = legacyManifestPath) {
+export async function saveEpisodeDraft(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, content: string, manifestPath = legacyManifestPath,
+  draftSnapshot?: { revision: string; encoding: "utf-8" | "utf-8-bom" | "utf-16le" | "utf-16be" } | null) {
   const episode = project.episodes.find(item => item.id === episodeId);
   if (!episode) throw new Error("目标分集不存在");
   const draftPath = episode.draftPath ?? `${getProjectRoot(manifestPath)}/scripts/${episode.id}/draft.md`;
   await ensureDirectory(files, `${getProjectRoot(manifestPath)}/scripts/${episode.id}`);
-  await files.write(draftPath, content);
-  if (await files.readText(draftPath) !== content) throw new Error("工作稿回读校验失败；磁盘文件已保留，请重试");
+  if (draftSnapshot === null) await files.write(draftPath, content, true);
+  else if (draftSnapshot) {
+    if (!files.writeTextSnapshot) throw new Error("当前文件接口不支持剧本修订冲突保护，请重新加载项目后再保存");
+    await files.writeTextSnapshot(draftPath, content, draftSnapshot);
+  } else await files.write(draftPath, content);
+  const savedDraft = files.readTextSnapshot ? (await files.readTextSnapshot(draftPath)).text : await files.readText(draftPath);
+  if (savedDraft !== content) throw new Error("工作稿回读校验失败；磁盘文件已保留，请重试");
   const snapshot = cloneProject(project);
   const target = snapshot.episodes.find(item => item.id === episodeId)!;
   target.draftPath = draftPath;
-  snapshot.updatedAt = new Date().toISOString();
-  await files.writeJson(manifestPath, snapshot);
+  await saveProjectSnapshot(files, snapshot, manifestPath);
   const saved = await files.readJson<DramaProject>(manifestPath);
   if (saved.episodes.find(item => item.id === episodeId)?.draftPath !== draftPath) throw new Error("工作稿已写入，但项目索引回读校验失败；工作稿文件已保留");
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return draftPath;
 }
 
@@ -223,16 +250,15 @@ export async function saveEpisodeScriptVersion(files: DramaWorkspaceFiles, proje
   target.status = "草稿";
   snapshot.scriptVersions[episodeId] ??= [];
   snapshot.scriptVersions[episodeId]!.push(record);
-  snapshot.updatedAt = new Date().toISOString();
   try {
-    await files.writeJson(manifestPath, snapshot);
+    await saveProjectSnapshot(files, snapshot, manifestPath);
     const saved = await files.readJson<DramaProject>(manifestPath);
     const savedVersion = saved.scriptVersions[episodeId]?.find(item => item.id === id);
     if (savedVersion?.path !== path || saved.episodes.find(item => item.id === episodeId)?.scriptPath !== path) throw new Error("剧本文件已保存，但项目索引回读校验失败");
   } catch (error) {
     throw new Error(`剧本文件 ${path} 已保存，但项目索引未能确认；原文件未覆盖。${error instanceof Error ? ` ${error.message}` : ""}`);
   }
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return record;
 }
 
@@ -248,7 +274,7 @@ export async function createCharacter(files: DramaWorkspaceFiles, project: Drama
   };
   snapshot.characters.push(character);
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return character;
 }
 
@@ -262,7 +288,7 @@ export async function duplicateCharacter(files: DramaWorkspaceFiles, project: Dr
     snapshot.assets.push({ ...asset, id: crypto.randomUUID(), characterId: character.id });
   }
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return character;
 }
 
@@ -272,7 +298,7 @@ export async function archiveCharacter(files: DramaWorkspaceFiles, project: Dram
   if (!character) throw new Error("目标人物不存在");
   character.archived = true;
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return character;
 }
 
@@ -289,7 +315,7 @@ export async function updateScriptReview(files: DramaWorkspaceFiles, project: Dr
   version.status = status;
   episode.status = status === "已确认" ? "已确认" : status === "待审核" ? "待审核" : episode.formalVersionId ? "草稿" : status;
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
 }
 
 export async function createDramaProject(files: DramaWorkspaceFiles, input: Pick<DramaProject, "name" | "genre" | "style" | "targetEpisodes" | "targetDuration">) {
@@ -314,9 +340,11 @@ export async function createDramaProject(files: DramaWorkspaceFiles, input: Pick
   await ensureDirectory(files, `${dataPath}/projects/${project.id}/scripts`);
   const path = `${dataPath}/projects/${project.id}/project.json`;
   await files.writeJson(path, project, true);
-  const saved = await files.readJson<DramaProject>(path);
+  const fileSnapshot = await files.readTextSnapshot?.(path);
+  const saved = fileSnapshot ? JSON.parse(fileSnapshot.text) as DramaProject : await files.readJson<DramaProject>(path);
   validateProjectIdentity(saved, path);
   if (JSON.stringify(saved) !== JSON.stringify(project)) throw new Error("短剧项目创建后回读校验失败；磁盘内容已保留，请重新载入");
+  if (fileSnapshot) projectRevisions.set(project, fileSnapshot.revision);
   return project;
 }
 
@@ -403,7 +431,7 @@ export async function createEpisode(files: DramaWorkspaceFiles, project: DramaPr
   snapshot.seasons.find(item => item.id === seasonId)!.episodes.push(episode.id);
   snapshot.targetEpisodes = snapshot.episodes.length;
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return episode;
 }
 
@@ -414,7 +442,7 @@ export async function updateEpisode(files: DramaWorkspaceFiles, project: DramaPr
   if (patch.characterIds && patch.characterIds.some(id => !snapshot.characters.some(character => character.id === id))) throw new Error("分集人物关联必须使用此项目中的稳定人物 ID");
   Object.assign(episode, patch);
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return episode;
 }
 
@@ -431,7 +459,7 @@ export async function createScene(files: DramaWorkspaceFiles, project: DramaProj
   };
   episode.scenes.push(scene);
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return scene;
 }
 
@@ -443,7 +471,7 @@ export async function updateScene(files: DramaWorkspaceFiles, project: DramaProj
   if (patch.sourceScriptVersionId && !snapshot.scriptVersions[episodeId]?.some(version => version.id === patch.sourceScriptVersionId)) throw new Error("场景剧本关联必须使用此分集中的稳定剧本版本 ID");
   Object.assign(scene, patch);
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return scene;
 }
 
@@ -469,7 +497,7 @@ export async function duplicateScene(files: DramaWorkspaceFiles, project: DramaP
   if (source.referenceAssetId && assetIds.has(source.referenceAssetId)) scene.referenceAssetId = assetIds.get(source.referenceAssetId);
   episode.scenes.push(scene);
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return scene;
 }
 
@@ -479,7 +507,7 @@ export async function archiveScene(files: DramaWorkspaceFiles, project: DramaPro
   if (!scene) throw new Error("目标场景不存在或不属于指定分集");
   scene.archived = true;
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return scene;
 }
 
@@ -501,7 +529,7 @@ export async function createShot(files: DramaWorkspaceFiles, project: DramaProje
   validateShotAssetLinks(project, shot);
   episode.shots.push(shot);
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return shot;
 }
 
@@ -520,7 +548,7 @@ export async function duplicateShot(files: DramaWorkspaceFiles, project: DramaPr
   episode.shots = orderedShots;
   validateShotAssetLinks(snapshot, shot);
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return shot;
 }
 
@@ -530,7 +558,7 @@ export async function archiveShot(files: DramaWorkspaceFiles, project: DramaProj
   if (!shot) throw new Error("目标镜头不存在或不属于指定分集");
   shot.archived = true;
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return shot;
 }
 
@@ -544,7 +572,7 @@ export async function updateShot(files: DramaWorkspaceFiles, project: DramaProje
   Object.assign(shot, patch);
   validateShotAssetLinks(project, shot);
   await saveProjectSnapshot(files, snapshot, manifestPath);
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return shot;
 }
 
@@ -710,7 +738,7 @@ export async function confirmDramaScriptImport(files: DramaWorkspaceFiles, proje
   } catch (error) {
     throw new Error(`剧本原文已安全保存在 ${sourcePath}，但项目索引导入失败；可使用同一文件重试恢复。${error instanceof Error ? ` ${error.message}` : ""}`);
   }
-  Object.assign(project, snapshot);
+  applyDramaProjectSnapshot(project, snapshot);
   return {
     deduplicated: false,
     scriptVersionId: version.id,

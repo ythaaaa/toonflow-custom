@@ -16,7 +16,7 @@ const runtimes = new WeakMap<Application, Runtime>();
 const userRoutes = new Set(["register", "login", "session", "logout", "host"].map(name => `/api/multitenant/user/${name}`));
 const controlRoutes = new Set(["status", "setup", "login", "logout", "state", "enabled", "registration", "hostsession"].map(name => `/api/multitenant/${name}`));
 const userReadRoutes = new Set(["/api/ai/models", "/api/ai/media/models", "/api/multitenant/user/balance", "/api/nodes/get", "/api/nodes/files", "/api/ext/list", "/api/ext/read", "/api/tools/get"]);
-const modelWriteRoutes = new Set(["/api/ai/generate", "/api/ai/media/price", "/api/ai/media/generate", "/api/ai/media/tasks/status", "/api/ai/media/tasks/cancel"]);
+const modelWriteRoutes = new Set(["/api/ai/generate", "/api/ai/media/price", "/api/ai/media/generate", "/api/ai/media/tasks/status", "/api/ai/media/tasks/cancel", "/api/ai/media/tasks/stopWaiting"]);
 const communityReads = new Set(["getAdvertisements", "getExploreProjects", "getExploreProject", "getExploreProcess", "getExploreDownload", "getSponsorList"]
   .map(name => `/api/channel/community/${name.toLowerCase()}`));
 const platformPrefixes = ["/api/providers", "/api/plugins", "/api/mcp/servers", "/api/channel/account", "/api/channel/model", "/api/channel/provider", "/api/channel/subaccounts", "/api/channel/user", "/api/channel/wallet", "/api/channel/plugin"];

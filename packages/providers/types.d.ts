@@ -45,6 +45,7 @@ type ProviderTaskData = { [key: string]: ProviderTaskValue };
 interface ProviderContext<TConfig = Record<string, unknown>> {
   config: TConfig;
   signal?: AbortSignal;
+  reportStage?: (stage: "uploading" | "submitting" | "waiting" | "downloading" | "recovering") => Promise<void>;
   /** 异步任务接单后立即等待保存；旧宿主缺省此能力，使用可选链调用。 */
   saveTaskData?: (data: ProviderTaskData) => Promise<void>;
   /** 宿主直接注入工具，供应商无需 import；FFmpeg 为按需安装的插件能力。 */
@@ -106,7 +107,7 @@ interface ProviderTools {
   };
   /** 独立 ChatGPT 会员授权的图片生成宿主能力；不接收 API Key，也不暴露 OAuth 凭据。 */
   gptImageSubscription: {
-    generateImage(request: { model: string; prompt: string; images?: MediaInput[]; ratio?: string }): Promise<MediaAsset[]>;
+    generateImage(request: { model: string; prompt: string; images?: MediaInput[]; ratio?: string; size?: string; quality?: string }): Promise<MediaAsset[]>;
   };
   /**
    * 获取绑定当前工作区的原生 @renmu/fluent-ffmpeg 工厂，沿用链式调用、事件、流和 ffprobe 回调。

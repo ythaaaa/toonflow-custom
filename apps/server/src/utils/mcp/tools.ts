@@ -1,5 +1,6 @@
 import { resolveRequestLocale, runWithLocale, t } from "@/lib/i18n";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import type { Request } from "express";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import { realpath, stat, mkdir, readdir, readFile } from "@toonflow/file";
@@ -136,6 +137,10 @@ function dramaFiles(directory: string): DramaWorkspaceFiles {
       return { entries: entries.filter(item => item.isFile() || item.isDirectory()).map(item => ({ name: item.name, path: path ? `${path}/${item.name}` : item.name, type: item.isDirectory() ? "directory" as const : "file" as const })) };
     },
     async readText(path) { return readFile(await pathOf(path), "utf8"); },
+    async readTextSnapshot(path) {
+      const bytes = await readFile(await pathOf(path));
+      return { text: bytes.toString("utf8"), encoding: "utf-8" as const, revision: createHash("sha256").update(bytes).digest("hex") };
+    },
     async readJson<T>(path: string) { return JSON.parse(await readFile(await pathOf(path), "utf8")) as T; },
     async write(path, content, exclusive = false) {
       const target = await pathOf(path, true);
@@ -143,6 +148,18 @@ function dramaFiles(directory: string): DramaWorkspaceFiles {
       await writeWorkspaceFile(target, typeof content === "string" ? content : content instanceof Blob ? Buffer.from(await content.arrayBuffer()) : content instanceof ArrayBuffer ? Buffer.from(content) : content, exclusive);
     },
     async writeJson(path, content, exclusive = false) { return this.write(path, `${JSON.stringify(content, null, 2)}\n`, exclusive); },
+    async writeTextSnapshot(path, content, snapshot) {
+      const target = await pathOf(path);
+      const current = await readFile(target).catch(error => {
+        if (error.code === "ENOENT") throw Object.assign(new Error("短剧项目已被删除或移动，当前编辑内容已保留"), { status: 409, code: "ESTALE" });
+        throw error;
+      });
+      if (createHash("sha256").update(current).digest("hex") !== snapshot.revision) {
+        throw Object.assign(new Error("短剧项目已被外部更新，当前编辑内容已保留；请重新加载项目后处理冲突"), { status: 409, code: "ESTALE" });
+      }
+      await writeWorkspaceFile(target, content);
+      return createHash("sha256").update(content).digest("hex");
+    },
     async mkdir(path) { await mkdir(await pathOf(path, true), { recursive: true }); },
     async remove(path, recursive = false) {
       const target = await pathOf(path);

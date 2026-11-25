@@ -11,13 +11,18 @@ const authUrl = "https://auth.openai.com/oauth/authorize";
 const tokenUrl = "https://auth.openai.com/oauth/token";
 const generationUrl = "https://chatgpt.com/backend-api/codex/images/generations";
 const editsUrl = "https://chatgpt.com/backend-api/codex/images/edits";
-const fixedModel = "gpt-image-2.6-flare";
-const sizes: Record<string, string> = { "1:1": "1024x1024", "16:9": "1536x864", "9:16": "864x1536" };
+const defaultModel = "gpt-image-2";
+const imageQualities: Record<string, readonly string[]> = {
+  "gpt-image-2": ["auto", "low", "medium", "high"],
+  "gpt-image-2.5-flare": ["auto", "low", "medium", "high", "xhigh", "max"],
+  "gpt-image-2.5-sunburst": ["auto", "low", "medium", "high", "xhigh", "max"],
+};
+const ratioSizes: Record<string, string> = { "1:1": "1024x1024", "16:9": "1536x864", "9:16": "864x1536", auto: "auto" };
 const directory = join(dirname(conf.path), "gptImageSubscription");
 const authPath = join(directory, "auth.json");
 type AuthRecord = { accessToken: string; refreshToken: string; expiresAt: number; accountId: string; email: string };
 type LoginAttempt = { verifier: string; expiresAt: number };
-type Input = { model: string; prompt: string; ratio?: string; images?: MediaInput[] };
+type Input = { model: string; prompt: string; ratio?: string; size?: string; quality?: string; images?: MediaInput[] };
 const pending = new Map<string, LoginAttempt>();
 let callbackServer: Server | undefined;
 let refreshPromise: Promise<AuthRecord> | undefined;
@@ -108,10 +113,17 @@ function imageInfo(bytes: Buffer) {
   }
   throw new Error("上游响应不是可识别的 PNG、JPEG 或 WebP 图片");
 }
-function promptWithRatio(prompt: string, ratio: string) {
-  if (ratio === "auto") return prompt;
-  const direction = ratio === "1:1" ? "方形" : ratio === "16:9" ? "横向宽屏" : "竖向";
-  return `${prompt}\n\n请按 ${ratio} 宽高比构图，使用${direction}画幅。`;
+function validateImageSize(size: string) {
+  if (size === "auto") return;
+  const match = /^(\d+)x(\d+)$/.exec(size);
+  if (!match) throw new Error("画布尺寸须为 auto 或有效的宽x高分辨率");
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const short = Math.min(width, height);
+  const long = Math.max(width, height);
+  const pixels = width * height;
+  if (width % 16 !== 0 || height % 16 !== 0 || long > 3840 || long > short * 3 || pixels < 655360 || pixels > 8294400)
+    throw new Error("画布尺寸超出 GPT Image 支持的范围");
 }
 function inputImage(image: MediaInput) {
   let data: string;
@@ -128,22 +140,28 @@ function inputImage(image: MediaInput) {
   return { image_url: `data:${mimeType};base64,${bytes.toString("base64")}` };
 }
 export async function generateSubscriptionImage(request: Input, signal?: AbortSignal): Promise<MediaAsset[]> {
-  if (request.model !== fixedModel) throw new Error(`仅支持已验证模型 ${fixedModel}`);
+  const qualities = imageQualities[request.model];
+  if (!qualities) throw new Error(`GPT 会员生图不支持模型 ${request.model}`);
   const prompt = request.prompt.trim();
   if (!prompt || prompt.length > 10000) throw new Error("提示词须为 1 到 10000 个字符");
-  const ratio = request.ratio || "1:1";
-  if (!(ratio in sizes || ratio === "auto")) throw new Error("支持的画幅为 1:1、16:9、9:16 或 auto");
+  const quality = request.quality ?? "auto";
+  if (!qualities.includes(quality)) throw new Error(`模型 ${request.model} 不支持画质 ${quality}`);
+  const ratio = request.ratio;
+  const size = request.size ?? (ratio ? ratioSizes[ratio] : "auto");
+  if (!size) throw new Error("旧版画幅仅支持 1:1、16:9、9:16 或 auto；请使用宽x高分辨率");
+  if (request.size && ratio && ratio !== "auto" && ratioSizes[ratio] !== request.size)
+    throw new Error("所选画幅与分辨率不一致");
+  validateImageSize(size);
   const images = request.images ?? [];
   if (images.length > 5) throw new Error("最多选择 5 张参考图");
   const auth = await freshAuth();
   const controller = signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000);
   try {
-    const size = sizes[ratio];
     const response = await fetch(images.length ? editsUrl : generationUrl, {
       method: "POST", redirect: "error", signal: controller,
       headers: { authorization: `Bearer ${auth.accessToken}`, "chatgpt-account-id": auth.accountId,
         originator: "codex_cli_rs", "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ prompt: promptWithRatio(prompt, ratio), model: fixedModel, quality: "auto", ...(size ? { size } : {}), ...(images.length ? { images: images.map(inputImage) } : {}) }),
+      body: JSON.stringify({ prompt, background: "auto", model: request.model, quality, size, ...(images.length ? { images: images.map(inputImage) } : {}) }),
     });
     const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
     if (!response.ok) {
@@ -163,7 +181,7 @@ export async function generateSubscriptionImage(request: Input, signal?: AbortSi
   }
 }
 export function getSubscriptionStatus() {
-  return readAuth().then(auth => ({ authenticated: Boolean(auth), email: auth?.email ?? "", expiresAt: auth?.expiresAt ?? null, model: fixedModel,
+  return readAuth().then(auth => ({ authenticated: Boolean(auth), email: auth?.email ?? "", expiresAt: auth?.expiresAt ?? null, model: defaultModel,
     aspectRatios: ["1:1", "16:9", "9:16"], quality: "auto" as const }));
 }
 export async function startSubscriptionLogin() {

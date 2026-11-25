@@ -81,6 +81,7 @@
           v-model:content="documentContent"
           :title="documentInfo.title"
           :subtitle="documentSubtitle"
+          :sourceHint="documentInfo.sourceHint"
           :workspaceDirectory="workspaceDirectory || ''"
           :resourcePath="documentResourcePath"
           :renderedContent="renderedContent"
@@ -121,18 +122,20 @@ import { marked } from "marked";
 import { IconArrowRight } from "@tabler/icons-vue";
 import { useWorkspaceStore } from "@/stores/workspace";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
+import type { TextSnapshot } from "@/lib/workspaceFiles";
 import dramaStudioNav from "./dramaStudioNav.vue";
 import dramaDocumentView from "./dramaDocumentView.vue";
 import codexAssistantPane from "./codexAssistantPane.vue";
 import {
-  createDramaProject, createEpisode, createSeason, listDramaProjects, readEpisodeScript,
+  applyDramaProjectSnapshot, cloneDramaProject, createDramaProject, createEpisode, createSeason, listDramaProjects, readEpisodeScript,
   renameDramaProject, saveDramaProject, saveEpisodeDraft, saveEpisodeScriptVersion,
   type DramaAsset, type DramaCharacter, type DramaEpisode, type DramaProject, type DramaProjectEntry,
   type DramaShot,
 } from "@/lib/dramaWorkspace";
 
 type DocumentKind = "markdown" | "storyOutline" | "visualStyle" | "episodeOutlines" | "script";
-type DocumentInfo = { id: string; title: string; subtitle: string; kind: DocumentKind; path?: string; episode?: DramaEpisode; seasonId?: string; seed?: string };
+type DocumentInfo = { id: string; title: string; subtitle: string; kind: DocumentKind; path?: string; episode?: DramaEpisode; seasonId?: string; seed?: string; sourceHint?: string };
+type DocumentFileState = { path: string; text: string; revision?: string; encoding?: TextSnapshot["encoding"]; missing: boolean };
 
 const router = useRouter();
 const props = defineProps<{ initialProjectId?: string; initialEpisodeId?: string; initialSection?: string }>();
@@ -160,6 +163,7 @@ const showCreateForm = ref(false);
 const selectedDocumentId = ref("");
 const documentContent = ref("");
 const loadedContent = ref("");
+const documentFileState = ref<DocumentFileState>();
 const documentStatus = ref("已保存");
 const editing = ref(false);
 const activeVersionId = ref("");
@@ -405,14 +409,25 @@ async function loadDocument(documentId: string) {
   loadingDocument.value = true;
   editing.value = false;
   activeVersionId.value = "";
+  documentFileState.value = undefined;
   try {
     const files = useWorkspaceFiles(directory);
     let content: string;
     if (info.kind === "storyOutline") content = value.storyOutline ?? "";
     else if (info.kind === "visualStyle") content = value.style ?? "";
-    else if (info.kind === "episodeOutlines") content = await readMarkdown(files, info.path!, buildEpisodeOutlines(info.seasonId!));
-    else if (info.kind === "script") content = await readEpisodeScript(files, value, info.episode!.id, manifestPath.value);
-    else content = await readMarkdown(files, info.path!, info.seed ?? "");
+    else if (info.kind === "episodeOutlines") {
+      documentFileState.value = await readDocumentFile(files, info.path!, buildEpisodeOutlines(info.seasonId!));
+      content = documentFileState.value.text;
+    } else if (info.kind === "script") {
+      content = await readEpisodeScript(files, value, info.episode!.id, manifestPath.value);
+      const root = manifestPath.value.replace(/\/project\.json$/, "");
+      const draftPath = info.episode!.draftPath ?? `${root}/scripts/${info.episode!.id}/draft.md`;
+      documentFileState.value = await readDocumentFile(files, draftPath, content);
+      if (!documentFileState.value.missing) content = documentFileState.value.text;
+    } else {
+      documentFileState.value = await readDocumentFile(files, info.path!, info.seed ?? "");
+      content = documentFileState.value.text;
+    }
     if (requestId !== documentRequestId || value !== project.value || directory !== workspaceDirectory.value) return;
     documentContent.value = content;
     loadedContent.value = content;
@@ -427,10 +442,12 @@ async function loadDocument(documentId: string) {
   }
 }
 
-async function readMarkdown(files: ReturnType<typeof useWorkspaceFiles>, path: string, fallback: string) {
-  try { return await files.readText(path); }
-  catch (error) {
-    if (isMissingError(error)) return fallback;
+async function readDocumentFile(files: ReturnType<typeof useWorkspaceFiles>, path: string, fallback: string): Promise<DocumentFileState> {
+  try {
+    const snapshot = await files.readTextSnapshot(path);
+    return { path, text: snapshot.text, revision: snapshot.revision, encoding: snapshot.encoding, missing: false };
+  } catch (error) {
+    if (isMissingError(error)) return { path, text: fallback, missing: true };
     throw error;
   }
 }
@@ -460,6 +477,9 @@ function getDocumentInfo(documentId: string): DocumentInfo | undefined {
       id: documentId, title: shared.title, subtitle: "全剧设定", kind,
       path: shared.file ? root + "/documents/" + shared.file : undefined,
       seed: shared.file ? buildSharedSeed(documentId) : undefined,
+      sourceHint: kind === "storyOutline" || kind === "visualStyle"
+        ? "此文档保存到 project.json；画布下次打开时读取项目数据。已编辑的画布节点不会从 Markdown 自动覆盖。"
+        : "此 Markdown 是阅读和编辑副本，保存不会改写 project.json 或画布。生产仍以 project.json 与原生画布节点为准；如需生效，请通过现有项目导入流程或外部 Codex 更新源数据。",
     };
   }
   const seasonMatch = documentId.match(/^season:([^:]+):(outline|episodes)$/);
@@ -471,6 +491,9 @@ function getDocumentInfo(documentId: string): DocumentInfo | undefined {
       id: documentId, title: isOutlines ? "分集大纲" : "分季大纲", subtitle: season.name,
       kind: isOutlines ? "episodeOutlines" : "markdown", seasonId: season.id,
       path: root + "/documents/seasons/" + season.id + "/" + (isOutlines ? "episodeOutlines" : "outline") + ".md",
+      sourceHint: isOutlines
+        ? "保存会按 EP 序号更新 project.json 中的分集大纲；现有画布节点内容不会从 Markdown 自动覆盖。"
+        : "此 Markdown 是独立阅读和编辑副本，保存不会改写 project.json 或画布；生产仍以项目数据和原生画布节点为准。",
     };
   }
   const episodeMatch = documentId.match(/^episode:([^:]+):(script|storyboard|imagePrompts|videoPrompts)$/);
@@ -486,6 +509,9 @@ function getDocumentInfo(documentId: string): DocumentInfo | undefined {
     id: documentId, title: titles[kind], subtitle: [season?.name, episodeLabel].filter(Boolean).join(" · "),
     kind: kind === "script" ? "script" : "markdown", episode,
     path: kind === "script" ? undefined : root + "/scripts/" + episode.id + "/" + fileNames[kind],
+    sourceHint: kind === "script"
+      ? "保存会更新剧本工作稿；生产画布读取 project.json 中已导入的剧本版本和结构。保存工作稿不会自动覆盖画布；需要更新源数据时使用现有新版本/导入流程，画布上已编辑的节点会保留。"
+      : "此 Markdown 是独立提示词副本，画布与生成流程不会自动读取它。生产使用 project.json 和原生无限画布节点；修改本文件后请通过现有流程更新源数据，系统不会覆盖已编辑的画布节点。",
     seed: kind === "storyboard" ? buildStoryboard(episode)
       : kind === "imagePrompts" ? buildPromptDocument(episode, "imagePrompt")
         : kind === "videoPrompts" ? buildPromptDocument(episode, "videoPrompt") : undefined,
@@ -635,17 +661,21 @@ async function saveDocument() {
   try {
     const files = useWorkspaceFiles(directory);
     if (info.kind === "script") {
-      await saveEpisodeDraft(files, value, info.episode!.id, documentContent.value, manifestPath.value);
+      const fileState = documentFileState.value;
+      if (!fileState) throw new Error("文档修订信息已失效，请重新加载后再保存");
+      await saveEpisodeDraft(files, value, info.episode!.id, documentContent.value, manifestPath.value,
+        fileState.missing ? null : { revision: fileState.revision!, encoding: fileState.encoding! });
+      documentFileState.value = await readDocumentFile(files, fileState.path, documentContent.value);
     } else if (info.kind === "storyOutline" || info.kind === "visualStyle" || info.kind === "episodeOutlines") {
-      const next = structuredClone(value);
+      const next = cloneDramaProject(value);
       if (info.kind === "storyOutline") next.storyOutline = documentContent.value;
       else if (info.kind === "visualStyle") next.style = documentContent.value;
       else parseEpisodeOutlines(documentContent.value, info.seasonId!, next);
-      if (info.path) await writeMarkdown(files, info.path, documentContent.value);
+      if (info.path) documentFileState.value = await writeMarkdown(files, info.path, documentContent.value, documentFileState.value);
       await saveDramaProject(files, next, manifestPath.value);
-      Object.assign(value, next);
+      applyDramaProjectSnapshot(value, next);
     } else {
-      await writeMarkdown(files, info.path!, documentContent.value);
+      documentFileState.value = await writeMarkdown(files, info.path!, documentContent.value, documentFileState.value);
     }
     loadedContent.value = documentContent.value;
     editing.value = false;
@@ -653,7 +683,8 @@ async function saveDocument() {
     documentStatus.value = "已保存";
     ElMessage.success("文档已保存");
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "保存文档失败");
+    const responseMessage = (error as { response?: { data?: { message?: unknown } } } | null)?.response?.data?.message;
+    ElMessage.error(typeof responseMessage === "string" ? responseMessage : error instanceof Error ? error.message : "保存文档失败");
   } finally { savingDocument.value = false; }
 }
 
@@ -665,7 +696,11 @@ async function saveAsVersion() {
   savingVersion.value = true;
   try {
     const files = useWorkspaceFiles(directory);
-    await saveEpisodeDraft(files, value, info.episode!.id, documentContent.value, manifestPath.value);
+    const fileState = documentFileState.value;
+    if (!fileState) throw new Error("剧本修订信息已失效，请重新加载后再保存");
+    await saveEpisodeDraft(files, value, info.episode!.id, documentContent.value, manifestPath.value,
+      fileState.missing ? null : { revision: fileState.revision!, encoding: fileState.encoding! });
+    documentFileState.value = await readDocumentFile(files, fileState.path, documentContent.value);
     const version = await saveEpisodeScriptVersion(files, value, info.episode!.id, documentContent.value, manifestPath.value);
     loadedContent.value = documentContent.value;
     editing.value = false;
@@ -677,11 +712,15 @@ async function saveAsVersion() {
   } finally { savingVersion.value = false; }
 }
 
-async function writeMarkdown(files: ReturnType<typeof useWorkspaceFiles>, path: string, content: string) {
+async function writeMarkdown(files: ReturnType<typeof useWorkspaceFiles>, path: string, content: string, fileState?: DocumentFileState): Promise<DocumentFileState> {
+  if (!fileState || fileState.path !== path) throw new Error("文档修订信息已失效，请重新加载后再保存");
   const separator = path.lastIndexOf("/");
   await ensureDirectory(files, path.slice(0, separator));
-  await files.write(path, content);
-  if (await files.readText(path) !== content) throw new Error("文档写入后回读校验失败；文件已保留，请重新载入");
+  if (fileState.missing) await files.write(path, content, true);
+  else await files.writeTextSnapshot(path, content, { revision: fileState.revision!, encoding: fileState.encoding! });
+  const snapshot = await files.readTextSnapshot(path);
+  if (snapshot.text !== content) throw new Error("文档写入后回读校验失败；文件已保留，请重新载入");
+  return { path, text: snapshot.text, revision: snapshot.revision, encoding: snapshot.encoding, missing: false };
 }
 
 async function ensureDirectory(files: ReturnType<typeof useWorkspaceFiles>, path: string) {
