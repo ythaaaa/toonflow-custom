@@ -115,3 +115,59 @@ describe("AutoDL ComfyUI API provider", () => {
     expect(calls.some(call => call.url.pathname.endsWith("/view"))).toBe(false);
   });
 });
+
+describe("AutoDL Zealman multi-image mapping", () => {
+  const image = (index: number) => ({ type: "binary" as const, data: new Uint8Array([index]), mimeType: "image/png", name: `image-${index}.png` });
+  function createZealmanContext() {
+    const calls: { path: string; init: RequestInit }[] = [];
+    const fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const path = new URL(String(input)).pathname;
+      calls.push({ path, init });
+      if (path === "/api/comfy/upload/file") {
+        const file = (init.body as FormData).get("file") as File;
+        return Response.json({ url: `/input/${file.name}` });
+      }
+      if (path === "/api/workflow/generate") return Response.json({ prompt_id: "mock-zealman-001" });
+      if (path === "/api/workflow/result") return Response.json({ status: "success", results: [{ type: "video", url: "/output/mock.mp4" }] });
+      if (path === "/output/mock.mp4") return new Response(new Uint8Array([0, 0, 0, 24]), { headers: { "content-type": "video/mp4" } });
+      throw new Error(`Unexpected mock request: ${path}`);
+    };
+    const inputs = { prompt: "", ref_image_0: "example-0.png", ref_image_1: "example-1.png", ref_image_2: "example-2.png", width: 0, height: 0, resolution: 480 };
+    const mapping = (input: string) => ({ nodeId: "input_values", input });
+    const context = {
+      config: { baseUrl: "http://autodl.test:6008", authType: "none" },
+      models: [{ id: "zealman", label: "Zealman", type: "video", mode: [["imageReference:3"]],
+        zealmanWorkflowId: "workflow-1", zealmanInputs: inputs,
+        comfyMapping: { prompt: mapping("prompt"), referenceImages: [0, 1, 2].map(index => mapping(`ref_image_${index}`)),
+          width: mapping("width"), height: mapping("height"), resolution: mapping("resolution") } }],
+      signal: new AbortController().signal,
+      saveTaskData: async () => {},
+      tool: { fetch, hash: Bun.hash, errorMessage: (value: unknown) => String(value ?? "") },
+    };
+    return { context, calls };
+  }
+
+  it("uploads all canvas images in order and maps 480p to numeric resolution", async () => {
+    const { context, calls } = createZealmanContext();
+    const result = await provider.generateVideo!.call(context as never, {
+      model: "zealman", mode: ["imageReference:3"], prompt: "move camera", images: [image(1), image(2), image(3)],
+      resolution: "480p", ratio: "16:9",
+    });
+    const submitted = JSON.parse(String(calls.find(call => call.path === "/api/workflow/generate")?.init.body));
+    expect(submitted.input_values).toMatchObject({ prompt: "move camera", ref_image_0: "/input/image-1.png",
+      ref_image_1: "/input/image-2.png", ref_image_2: "/input/image-3.png", width: 856, height: 480, resolution: 480 });
+    expect(calls.map(call => call.path)).toEqual([
+      "/api/comfy/upload/file", "/api/comfy/upload/file", "/api/comfy/upload/file",
+      "/api/workflow/generate", "/api/workflow/result", "/output/mock.mp4",
+    ]);
+    expect(result[0]?.mediaType).toBe("video");
+  });
+
+  it("rejects missing references before uploading or submitting", async () => {
+    const { context, calls } = createZealmanContext();
+    await expect(provider.generateVideo!.call(context as never, {
+      model: "zealman", mode: ["imageReference:3"], prompt: "move camera", images: [image(1), image(2)],
+    })).rejects.toThrow("需要 3 张参考图");
+    expect(calls).toHaveLength(0);
+  });
+});

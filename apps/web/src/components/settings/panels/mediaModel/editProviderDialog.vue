@@ -16,21 +16,21 @@
       <div v-if="provider?.id === 'autodlComfyUi'" class="comfyTools">
         <div class="comfyConnection">
           <el-button :loading="testingConnection" :disabled="saving || !formApi" @click="testConnection">连接测试</el-button>
-          <el-text type="info" size="small">连接测试只检查 ComfyUI API，不会提交生成任务。</el-text>
+          <el-text type="info" size="small">连接测试检查原生 ComfyUI 或 Zealman 工作流 API，不会提交生成任务。</el-text>
         </div>
         <div class="workflowHeading">
           <div>
-            <h4>ComfyUI API 工作流</h4>
-            <el-text type="info" size="small">导入 API 格式 JSON；选中工作流模型的“编辑”可配置节点映射。</el-text>
+            <h4>ComfyUI / Zealman 视频工作流</h4>
+            <el-text type="info" size="small">导入 ComfyUI API JSON，或包含 workflow_id 与 input_values 的 Zealman JSON；在模型编辑中确认参数映射。</el-text>
           </div>
           <input ref="workflowInput" type="file" accept=".json,application/json" hidden :disabled="saving" @change="importComfyWorkflow" />
           <el-button :icon="IconPlus" size="small" :disabled="saving" @click="workflowInput?.click()">导入 API 工作流</el-button>
         </div>
-        <el-alert title="ComfyUI：导出（API）JSON；普通界面工作流 JSON 不能直接提交。单个文件最大 500 KB。" type="info" :closable="false" />
+        <el-alert title="支持原生 ComfyUI API JSON 和 Zealman workflow_id / input_values JSON；普通界面工作流 JSON 不能直接提交。单个文件最大 500 KB。" type="info" :closable="false" />
         <div v-if="comfyWorkflows.length" class="workflowList">
           <el-card v-for="item in comfyWorkflows" :key="item.id" shadow="never">
             <div class="workflowSummary">
-              <div><strong>{{ item.label }}</strong><span>{{ Object.keys(item.comfyWorkflow).length }} 个节点</span></div>
+              <div><strong>{{ item.label }}</strong><span>{{ item.zealmanWorkflowId ? `Zealman · ${Object.keys(item.zealmanInputs ?? {}).length} 个参数` : `${Object.keys(item.comfyWorkflow ?? {}).length} 个节点` }}</span></div>
               <el-button text size="small" :disabled="saving" @click="editModel(models.indexOf(item))">配置模型与映射</el-button>
             </div>
             <el-text type="info" size="small">{{ workflowMappingSummary(item) }}</el-text>
@@ -125,10 +125,13 @@ const testingConnection = ref(false);
 const workflowInput = ref<HTMLInputElement>();
 type ComfyMappingField = { nodeId: string; input: string };
 type ComfyWorkflow = MediaProviderModel & {
-  comfyWorkflow: Record<string, { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } }>;
+  comfyWorkflow?: Record<string, { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } }>;
+  zealmanWorkflowId?: string;
+  zealmanInputs?: Record<string, unknown>;
   comfyMapping?: Record<string, unknown> & {
     prompt?: ComfyMappingField;
     image?: ComfyMappingField;
+    referenceImages?: ComfyMappingField[];
     firstFrame?: ComfyMappingField;
     lastFrame?: ComfyMappingField;
     width?: ComfyMappingField;
@@ -141,7 +144,7 @@ type ComfyWorkflow = MediaProviderModel & {
     outputNodeIds?: string[];
   };
 };
-const comfyWorkflows = computed(() => models.value.filter((item): item is ComfyWorkflow => !!item.comfyWorkflow && typeof item.comfyWorkflow === "object"));
+const comfyWorkflows = computed(() => models.value.filter((item): item is ComfyWorkflow => !!item.comfyWorkflow || !!item.zealmanWorkflowId));
 let testLoading: AbortController | undefined;
 const modelTypes = { get image() { return translate("图片"); }, get video() { return translate("视频"); }, get audio() { return translate("音频"); }, get text() { return translate("文本"); } };
 const modeLabels: Record<string, string> = {
@@ -222,10 +225,24 @@ async function importComfyWorkflow(event: Event) {
     if (file.size > 500 * 1024) throw new Error("单个工作流文件不能超过 500 KB");
     const source: unknown = JSON.parse(await file.text());
     const rawWorkflow = source && typeof source === "object" && !Array.isArray(source) ? source as Record<string, unknown> : undefined;
+    if (typeof rawWorkflow?.workflow_id === "string" && rawWorkflow.workflow_id.trim()) {
+      const inputValues = rawWorkflow.input_values && typeof rawWorkflow.input_values === "object" && !Array.isArray(rawWorkflow.input_values)
+        ? rawWorkflow.input_values as Record<string, unknown> : undefined;
+      if (!inputValues || !Object.keys(inputValues).length) {
+        throw new Error("Zealman JSON 需要包含非空 input_values 参数对象");
+      }
+      const label = file.name.replace(/\.json$/i, "").trim() || rawWorkflow.workflow_id;
+      models.value.push({ id: `workflow${Date.now().toString(36)}`, label, type: "video", mode: [],
+        zealmanWorkflowId: rawWorkflow.workflow_id.trim(), zealmanInputs: inputValues, comfyMapping: {},
+      });
+      ElMessage.success("Zealman 工作流已导入，请明确配置提示词、图片和其他参数映射后保存");
+      editModel(models.value.length - 1);
+      return;
+    }
     if (!rawWorkflow || !Object.keys(rawWorkflow).length || Object.keys(rawWorkflow).length > 5000 || Array.isArray(rawWorkflow.nodes) || "links" in rawWorkflow) {
       throw new Error("这不是 ComfyUI API 格式工作流；请从 ComfyUI 导出（API）JSON");
     }
-    const workflow: ComfyWorkflow["comfyWorkflow"] = {};
+    const workflow: NonNullable<ComfyWorkflow["comfyWorkflow"]> = {};
     for (const [nodeId, value] of Object.entries(rawWorkflow)) {
       const node = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
       const inputs = node?.inputs && typeof node.inputs === "object" && !Array.isArray(node.inputs) ? node.inputs as Record<string, unknown> : undefined;
@@ -252,7 +269,7 @@ async function importComfyWorkflow(event: Event) {
   }
 }
 
-function inferComfyMapping(workflow: ComfyWorkflow["comfyWorkflow"]) {
+function inferComfyMapping(workflow: NonNullable<ComfyWorkflow["comfyWorkflow"]>) {
   const inputs = Object.entries(workflow).flatMap(([nodeId, node]) => Object.entries(node.inputs)
     .filter(([, value]) => value === null || ["string", "number", "boolean"].includes(typeof value))
     .map(([input, value]) => ({ nodeId, input, value, classType: node.class_type.toLowerCase(), title: node._meta?.title?.toLowerCase() ?? "" })));
@@ -281,9 +298,9 @@ function inferComfyMapping(workflow: ComfyWorkflow["comfyWorkflow"]) {
 function workflowMappingSummary(model: ComfyWorkflow) {
   const mapping = model.comfyMapping ?? {};
   const mapped = [
-    ["提示词", mapping.prompt], ["参考图", mapping.image || mapping.firstFrame || mapping.lastFrame],
+    ["提示词", mapping.prompt], ["参考图", mapping.image || mapping.referenceImages?.length || mapping.firstFrame || mapping.lastFrame],
     ["尺寸", mapping.width || mapping.height || mapping.resolution], ["时长", mapping.duration],
-    ["输出", mapping.outputNodeIds?.length ? mapping.outputNodeIds.join("、") : undefined],
+    ["输出", model.zealmanWorkflowId ? "Zealman 结果视频" : mapping.outputNodeIds?.length ? mapping.outputNodeIds.join("、") : undefined],
   ].map(([label, value]) => `${label}${value ? "✓" : "—"}`);
   return mapped.join(" · ");
 }

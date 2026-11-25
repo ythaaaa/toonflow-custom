@@ -333,7 +333,11 @@ function loadModels() {
   modelsLoading.value = true;
   modelsRequest = ai.getMediaModels().then((items) => {
     if (disposed || generating.value || deleting.value) return;
-    models.value = items.filter((item) => item.type === "video");
+    models.value = items.filter((item) => item.type === "video").map(item => item.providerId === "autodlComfyUi" ? {
+      ...item,
+      durationResolutionMap: item.durationResolutionMap?.map(row => ({ ...row,
+        resolution: row.resolution.map(value => /^\d{3,4}$/.test(value) ? `${value}p` : value) })),
+    } : item);
     // ACT: 只给空配置选默认模型，保留暂时不可用的旧选择及其参数。
     if (!data.value.model) {
       const first = modelGroups.value[0]?.models[0];

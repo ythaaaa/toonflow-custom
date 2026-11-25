@@ -1,75 +1,146 @@
 <template>
-  <aside class="studioNav">
-    <nav aria-label="短剧创作中心">
-      <button type="button" :class="{ active: section === 'episodes' }" @click="emit('navigate', 'episodes')">分集列表</button>
-      <el-dropdown class="advancedMenu" trigger="click" @command="emit('navigate', $event)">
-        <el-button text>高级管理</el-button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item v-for="item in items" :key="item.id" :command="item.section">{{ item.label }}</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
-      <div class="navSubActions" v-if="section === 'script'">
-        <button type="button" :class="{ active: scriptView === 'editor' }" @click="emit('scriptView', 'editor')">剧本编辑</button>
-        <button type="button" :class="{ active: scriptView === 'review' }" @click="emit('scriptView', 'review')">历史版本与审核</button>
+  <aside class="studioNav" aria-label="剧本文档目录">
+    <div class="projectPicker">
+      <span class="pickerLabel">短剧项目</span>
+      <el-select :modelValue="projectId" aria-label="切换短剧项目" @update:modelValue="emit('project', $event)">
+        <el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id" />
+      </el-select>
+      <el-button class="projectListButton" text @click="emit('projectList')">所有项目</el-button>
+    </div>
+
+    <nav class="documentTree">
+      <div class="treeGroup">
+        <button class="treeGroupTitle" type="button" :aria-expanded="expandedGroups.has('project')" @click="toggleGroup('project')">
+          <icon-chevron-down v-if="expandedGroups.has('project')" :size="15" />
+          <icon-chevron-right v-else :size="15" />
+          <strong>全剧设定</strong>
+        </button>
+        <div v-if="expandedGroups.has('project')" class="treeChildren">
+          <button v-for="item in projectDocuments" :key="item.id" type="button" class="treeItem" :class="{ selected: selectedDocumentId === item.id }" :aria-current="selectedDocumentId === item.id ? 'page' : undefined" @click="emit('select', item.id)">{{ item.label }}</button>
+        </div>
       </div>
-      <div class="navSubActions" v-if="section === 'assets'">
-        <button v-for="item in assetItems" :key="item.id" type="button" :class="{ active: assetView === item.id }" @click="emit('assetView', item.id)">{{ item.label }}</button>
+
+      <div class="treeGroup">
+        <button class="treeGroupTitle" type="button" :aria-expanded="expandedGroups.has('seasons')" @click="toggleGroup('seasons')">
+          <icon-chevron-down v-if="expandedGroups.has('seasons')" :size="15" />
+          <icon-chevron-right v-else :size="15" />
+          <strong>剧集管理</strong>
+        </button>
+        <div v-if="expandedGroups.has('seasons')" class="treeChildren seasonChildren">
+          <section v-for="season in seasons" :key="season.id" class="seasonGroup">
+            <button class="treeGroupTitle seasonTitle" type="button" :aria-expanded="expandedGroups.has(season.id)" @click="toggleGroup(season.id)">
+              <icon-chevron-down v-if="expandedGroups.has(season.id)" :size="15" />
+              <icon-chevron-right v-else :size="15" />
+              <span>{{ season.name }}</span>
+            </button>
+            <div v-if="expandedGroups.has(season.id)" class="treeChildren episodeChildren">
+              <button type="button" class="treeItem" :class="{ selected: selectedDocumentId === `season:${season.id}:outline` }" :aria-current="selectedDocumentId === `season:${season.id}:outline` ? 'page' : undefined" @click="emit('select', `season:${season.id}:outline`)">分季大纲</button>
+              <button type="button" class="treeItem" :class="{ selected: selectedDocumentId === `season:${season.id}:episodes` }" :aria-current="selectedDocumentId === `season:${season.id}:episodes` ? 'page' : undefined" @click="emit('select', `season:${season.id}:episodes`)">分集大纲</button>
+              <section v-for="episode in episodesFor(season)" :key="episode.id" class="episodeGroup">
+                <button class="episodeTitle" type="button" :aria-expanded="expandedGroups.has(episode.id)" @click="toggleGroup(episode.id)">
+                  <icon-chevron-down v-if="expandedGroups.has(episode.id)" :size="14" />
+                  <icon-chevron-right v-else :size="14" />
+                  <span class="episodeNumber">EP{{ String(episode.number).padStart(3, '0') }}</span>
+                  <span class="episodeName">{{ episode.title }}</span>
+                </button>
+                <div v-if="expandedGroups.has(episode.id)" class="treeChildren episodeDocuments">
+                  <button v-for="item in episodeDocuments(episode.id)" :key="item.id" type="button" class="treeItem" :class="{ selected: selectedDocumentId === item.id }" :aria-current="selectedDocumentId === item.id ? 'page' : undefined" @click="item.id.endsWith(':canvas') ? emit('canvas', episode.id) : emit('select', item.id)">{{ item.label }}</button>
+                </div>
+              </section>
+              <button class="treeItem addItem" type="button" @click="emit('addEpisode', season.id)">＋ 新增分集</button>
+            </div>
+          </section>
+          <el-empty v-if="!seasons.length" description="还没有季度" :imageSize="48" />
+          <button class="treeItem addSeason" type="button" @click="emit('addSeason')">＋ 新增季度</button>
+        </div>
       </div>
     </nav>
-    <div class="episodePicker">
-      <label for="dramaSeasonPicker">当前季度</label>
-      <el-select id="dramaSeasonPicker" :modelValue="seasonId" placeholder="选择季度" aria-label="选择季度" @update:modelValue="emit('season', $event)">
-        <el-option v-for="season in seasons" :key="season.id" :label="season.name" :value="season.id" />
-      </el-select>
-      <div class="episodeHeading"><span>本季分集</span><span>{{ episodes.length }} 集</span></div>
-      <button v-for="episode in episodes" :key="episode.id" type="button" class="episodeLink" :class="{ active: currentEpisodeId === episode.id }" @click="emit('enterEpisode', episode.id)">
-        <b>EP{{ String(episode.number).padStart(3, '0') }}</b><span>{{ episode.title }}</span><small>{{ episode.status }}</small>
-      </button>
-      <el-empty v-if="!episodes.length" description="暂无分集" :imageSize="52" />
-      <el-button class="addSeason" @click="emit('addSeason')">新增季度</el-button>
-    </div>
   </aside>
 </template>
 
 <script setup lang="ts">
-import type { DramaEpisode, DramaSeason } from "@toonflow/drama-workspace";
+import { ref, watch } from "vue";
+import { IconChevronDown, IconChevronRight } from "@tabler/icons-vue";
+import type { DramaEpisode, DramaProject, DramaSeason } from "@toonflow/drama-workspace";
 
-defineProps<{
-  items: { id: string; label: string; section: string }[];
+const props = defineProps<{
+  projectId: string;
+  projects: Pick<DramaProject, "id" | "name">[];
   seasons: DramaSeason[];
   episodes: DramaEpisode[];
-  section: string;
-  scriptView: string;
-  assetView: string;
-  seasonId: string;
-  currentEpisodeId: string;
+  selectedDocumentId: string;
 }>();
-const assetItems = [
-  { id: "scenesAssets", label: "场景资产" },
-  { id: "props", label: "道具资产" },
-  { id: "media", label: "图片素材" },
-];
 const emit = defineEmits<{
-  navigate: [section: string];
-  scriptView: [view: string];
-  assetView: [view: string];
-  season: [seasonId: string];
-  enterEpisode: [episodeId: string];
+  project: [projectId: string];
+  projectList: [];
+  select: [documentId: string];
+  canvas: [episodeId: string];
   addSeason: [];
+  addEpisode: [seasonId: string];
 }>();
+
+const expandedGroups = ref(new Set(["project", "seasons"]));
+watch(() => [props.seasons.map(item => item.id).join("|"), props.episodes.map(item => item.id).join("|"), props.selectedDocumentId], () => {
+  const next = new Set(["project", "seasons"]);
+  const episodeId = props.selectedDocumentId.match(/^episode:([^:]+):/)?.[1];
+  const episode = episodeId ? props.episodes.find(item => item.id === episodeId) : undefined;
+  const seasonId = episode?.seasonId ?? props.selectedDocumentId.match(/^season:([^:]+):/)?.[1];
+  if (seasonId) next.add(seasonId);
+  if (episode) next.add(episode.id);
+  expandedGroups.value = next;
+}, { immediate: true });
+const projectDocuments = [
+  { id: "overview", label: "项目概览" },
+  { id: "storyOutline", label: "故事大纲" },
+  { id: "world", label: "世界观" },
+  { id: "characters", label: "人物设定" },
+  { id: "characterRelations", label: "人物关系" },
+  { id: "scenes", label: "场景设定" },
+  { id: "props", label: "道具设定" },
+  { id: "visualStyle", label: "视觉风格" },
+];
+
+function toggleGroup(id: string) {
+  const next = new Set(expandedGroups.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  expandedGroups.value = next;
+}
+function episodesFor(season: DramaSeason) {
+  return season.episodes.map(id => props.episodes.find(item => item.id === id)).filter((item): item is DramaEpisode => !!item);
+}
+function episodeDocuments(episodeId: string) {
+  return [
+    { id: `episode:${episodeId}:script`, label: "剧本正文" },
+    { id: `episode:${episodeId}:storyboard`, label: "分镜脚本" },
+    { id: `episode:${episodeId}:imagePrompts`, label: "生图提示词" },
+    { id: `episode:${episodeId}:videoPrompts`, label: "视频提示词" },
+    { id: `episode:${episodeId}:canvas`, label: "创作画布" },
+  ];
+}
 </script>
 
 <style lang="scss" scoped>
-.studioNav { display: flex; flex-direction: column; min-height: 0; overflow: auto; border-inline-end: 1px solid var(--el-border-color-lighter); background: var(--el-bg-color); }
-nav { display: flex; flex-direction: column; gap: 2px; padding: 12px 10px; }
-button { min-height: 34px; border: 0; border-radius: 5px; padding: 7px 10px; color: var(--el-text-color-regular); background: transparent; text-align: left; cursor: pointer; &:hover { background: var(--el-fill-color-light); } &.active { color: var(--el-color-primary); background: var(--el-color-primary-light-9); font-weight: 600; } }
-.advancedMenu { display: flex; margin-top: 4px; :deep(.el-button) { justify-content: flex-start; width: 100%; min-height: 34px; padding-inline: 10px; color: var(--el-text-color-secondary); } }
-.navSubActions { display: grid; gap: 2px; padding: 2px 0 4px 12px; button { min-height: 30px; font-size: 12px; } }
-.episodePicker { display: grid; align-content: start; gap: 7px; min-height: 0; padding: 12px 10px; border-top: 1px solid var(--el-border-color-lighter); label, .episodeHeading { color: var(--el-text-color-secondary); font-size: 12px; } }
-.episodeHeading { display: flex; justify-content: space-between; margin-top: 5px; }
-.episodeLink { display: flex; align-items: center; gap: 8px; min-height: 32px; overflow: hidden; font-size: 12px; b { flex: 0 0 auto; font-size: 11px; } span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } small { flex: 0 0 auto; color: var(--el-text-color-secondary); font-size: 10px; } }
-.addSeason { width: 100%; margin-top: 4px; }
-@media (max-width: 1100px) { .studioNav { font-size: 12px; } nav { padding: 8px 6px; } }
+.studioNav { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; border-inline-end: 1px solid var(--el-border-color-lighter); background: var(--el-bg-color); }
+.projectPicker { display: grid; gap: 8px; padding: 18px 14px 14px; border-bottom: 1px solid var(--el-border-color-lighter); font-size: 14px; }
+.pickerLabel { color: var(--el-text-color-secondary); font-size: 14px; }
+.projectListButton { justify-self: start; min-height: 28px; padding-inline: 0; }
+.documentTree { flex: 1; min-height: 0; overflow: auto; padding: 10px 8px 18px; }
+.treeGroup { margin-bottom: 6px; }
+.treeGroupTitle, .episodeTitle, .treeItem { display: flex; align-items: center; width: 100%; min-height: 34px; gap: 7px; border: 0; border-radius: 6px; padding: 6px 9px; color: var(--el-text-color-regular); background: transparent; font: inherit; text-align: left; cursor: pointer; &:hover { background: var(--el-fill-color-light); } }
+.treeGroupTitle { color: var(--el-text-color-primary); font-size: 14px; strong { font-size: 14px; font-weight: 600; } svg { flex: 0 0 auto; color: var(--el-text-color-secondary); } }
+.treeChildren { display: grid; gap: 1px; margin-inline-start: 14px; padding-inline-start: 8px; border-inline-start: 1px solid var(--el-border-color-lighter); }
+.treeItem { min-height: 31px; padding-inline: 10px; font-size: 14px; &.selected { color: var(--el-color-primary); background: var(--el-color-primary-light-9); font-weight: 600; } }
+.seasonChildren { gap: 4px; }
+.seasonTitle { min-height: 31px; font-weight: 500; }
+.episodeChildren { margin-inline-start: 12px; }
+.episodeGroup { min-width: 0; }
+.episodeTitle { min-height: 31px; padding-inline: 7px; font-size: 14px; svg { flex: 0 0 auto; color: var(--el-text-color-secondary); } }
+.episodeNumber { flex: 0 0 auto; color: var(--el-text-color-secondary); font-variant-numeric: tabular-nums; }
+.episodeName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.episodeDocuments { margin-inline-start: 13px; }
+.episodeDocuments .treeItem { min-height: 29px; font-size: 14px; }
+.addItem, .addSeason { color: var(--el-color-primary); }
+.addSeason { margin-top: 4px; }
+@media (max-width: 800px) { .projectPicker { padding: 12px 10px; } }
 </style>

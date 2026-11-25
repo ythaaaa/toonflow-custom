@@ -2,10 +2,13 @@
 
 type ComfyInputMapping = { nodeId: string; input: string };
 type ComfyWorkflowModel = ProviderModel & {
+  zealmanWorkflowId?: string;
+  zealmanInputs?: Record<string, unknown>;
   comfyWorkflow?: Record<string, { class_type: string; inputs: Record<string, unknown>; _meta?: { title?: string } }>;
   comfyMapping?: {
     prompt?: ComfyInputMapping;
     image?: ComfyInputMapping;
+    referenceImages?: ComfyInputMapping[];
     firstFrame?: ComfyInputMapping;
     lastFrame?: ComfyInputMapping;
     width?: ComfyInputMapping;
@@ -25,6 +28,7 @@ type ComfyTaskData = {
   model: string;
   baseUrlHash: string;
   status: string;
+  protocol?: "zealman";
 };
 
 const rules: ProviderFormRule[] = [
@@ -77,15 +81,7 @@ const rules: ProviderFormRule[] = [
   },
 ];
 
-const version = "1.0.0";
-const readme = `AutoDL 自租 GPU 实例上的 ComfyUI API 接入，不使用 AutoDL.Art 工作流云端 API。
-
-在 AutoDL 启动 Zealman ComfyUI v9.50 等支持 API 的模板，映射 ComfyUI 端口（常用 6008），将外部 HTTP/HTTPS 地址填入服务地址。ComfyUI 默认无需 API 鉴权；使用反向代理鉴权时可选 Bearer、Basic Auth 或自定义请求头。
-
-先在「编辑模型」中导入 ComfyUI 的「导出（API）」JSON。普通界面工作流 JSON（含 nodes、links、widgets_values）不能直接用于 API。导入后为工作流选择提示词、图像输入、宽高/分辨率、时长和输出节点映射，再设置节点支持的生成模式、时长与分辨率。
-
-生成使用 ComfyUI HTTP API：/upload/image、/prompt、/queue、/history/{prompt_id} 和 /view。ComfyUI 任务完成后，Toonflow 会下载视频并由现有媒体任务流程写入当前工作区素材目录。`;
-
+const version = "1.1.0";
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
@@ -289,7 +285,7 @@ function videoMimeType(filename: string) {
 }
 
 function dimensions(resolution: string | undefined, ratio: string | undefined) {
-  const longEdge = Number(/^(\d{3,4})p$/i.exec(resolution ?? "")?.[1]);
+  const longEdge = Number(/^(\d{3,4})p?$/i.exec(resolution ?? "")?.[1]);
   const [ratioWidth, ratioHeight] = (ratio ?? "16:9").split(":").map(Number);
   if (!Number.isFinite(longEdge) || longEdge <= 0 || !Number.isFinite(ratioWidth) || !Number.isFinite(ratioHeight) || !ratioWidth || !ratioHeight) return undefined;
   const scale = longEdge / Math.min(ratioWidth, ratioHeight);
@@ -323,15 +319,149 @@ async function uploadImage(context: ProviderContext, input: MediaInput, baseUrl:
   return [typeof result.subfolder === "string" && result.subfolder ? `${result.subfolder}/` : "", result.name].join("");
 }
 
-function selectedImages(request: VideoRequest, mapping: ComfyWorkflowModel["comfyMapping"]) {
-  const images: { field: "image" | "firstFrame" | "lastFrame"; input: MediaInput }[] = [];
-  if (request.firstFrame) images.push({ field: "firstFrame", input: request.firstFrame });
-  if (request.lastFrame) images.push({ field: "lastFrame", input: request.lastFrame });
-  if (request.images?.length) {
-    if (request.images.length > 1) throw new Error("当前 ComfyUI 映射支持单张参考图或首尾帧，请减少输入图片或调整工作流");
-    images.push({ field: "image", input: request.images[0]! });
+async function uploadZealmanImage(context: ProviderContext, input: MediaInput, baseUrl: string, signal: AbortSignal) {
+  const source = await imageBytes(input, context, signal);
+  if (!source.bytes.length || source.bytes.byteLength > 100 * 1024 * 1024) throw new Error("图生视频参考图为空或超过 100 MB");
+  const form = new FormData();
+  const buffer = new ArrayBuffer(source.bytes.byteLength);
+  new Uint8Array(buffer).set(source.bytes);
+  form.set("file", new Blob([buffer], { type: source.mimeType }), source.name);
+  const result = jsonObject(await requestJson(context, `${baseUrl}/api/comfy/upload/file`, "上传 Zealman 参考图", {
+    method: "POST", body: form, signal: requestSignal(context, 120000),
+  }), "Zealman 文件上传结果");
+  if (result.success === false) throw new Error(`Zealman 文件上传失败：${context.tool.errorMessage(result.error)}`);
+  const data = record(result.data) ?? result;
+  const reference = [data.url, data.path, data.file_path].find(value => typeof value === "string" && value);
+  if (typeof reference !== "string") throw new Error("Zealman 文件上传结果没有可用于工作流的文件引用，请检查实际上传响应");
+  return reference;
+}
+
+function setZealmanInput(values: Record<string, unknown>, mapping: ComfyInputMapping | undefined, field: string, value: string | number) {
+  if (!mapping) return;
+  if (mapping.nodeId !== "input_values" || !Object.hasOwn(values, mapping.input)) throw new Error(`Zealman 工作流的${field}映射已失效`);
+  const original = values[mapping.input];
+  if (original !== null && typeof original !== "string" && typeof original !== "number") throw new Error(`Zealman 工作流的${field}参数不是可编辑的字符串或数字`);
+  const converted = typeof original === "number" ? Number(value) : String(value);
+  if (typeof converted === "number" && !Number.isFinite(converted)) throw new Error(`Zealman 工作流的${field}参数需要数字，请检查参数映射`);
+  values[mapping.input] = converted;
+}
+
+async function pollZealmanTask(context: ProviderContext, task: ComfyTaskData) {
+  if (!context.signal) throw new Error("AutoDL ComfyUI 任务恢复缺少取消信号");
+  const baseUrl = serviceUrl(context);
+  if (String(context.tool.hash(baseUrl)) !== task.baseUrlHash) throw new Error("AutoDL 服务地址已变更，请恢复原服务地址后查询此任务");
+  const signal = requestSignal(context, 30 * 60_000);
+  while (true) {
+    signal.throwIfAborted();
+    const result = jsonObject(await requestJson(context, `${baseUrl}/api/workflow/result?prompt_id=${encodeURIComponent(task.promptId)}`, "查询 Zealman 任务", {
+      signal: requestSignal(context, 30000),
+    }), "Zealman 任务结果");
+    if (result.success === false || ["failed", "failure", "error"].includes(String(result.status ?? "").toLowerCase())) {
+      throw Object.assign(new Error(context.tool.errorMessage(result.error ?? result.message) || "Zealman 工作流执行失败"), { code: "MEDIA_TASK_FAILED" });
+    }
+    const video = Array.isArray(result.results) ? result.results.map(record).find(item => item?.type === "video" && typeof item.url === "string") : undefined;
+    if (video) {
+      const url = new URL(String(video.url), `${baseUrl}/`);
+      if (!/^https?:$/.test(url.protocol)) throw new Error("Zealman 视频地址不是 HTTP/HTTPS 地址");
+      const response = await context.tool.fetch(url.toString(), {
+        headers: url.origin === new URL(baseUrl).origin ? headers(context) : undefined,
+        signal: requestSignal(context, 180000), redirect: "error",
+      });
+      if (!response.ok) throw new Error(`下载 Zealman 视频失败（HTTP ${response.status}）`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (!bytes.length) throw new Error("Zealman 返回了空视频文件");
+      return [{ type: "binary", data: bytes, mimeType: response.headers.get("content-type")?.split(";")[0] || videoMimeType(url.pathname), mediaType: "video" }] satisfies MediaAsset[];
+    }
+    if (result.pending === false || ["success", "succeeded", "completed"].includes(String(result.status ?? "").toLowerCase())) {
+      throw Object.assign(new Error("Zealman 任务已结束，但没有返回视频文件"), { code: "MEDIA_TASK_FAILED" });
+    }
+    if (task.status !== "running") {
+      task.status = "running";
+      await context.saveTaskData?.(task);
+    }
+    await wait(signal, 2000);
   }
-  for (const { field } of images) if (!mapping?.[field]) throw new Error(`当前工作流没有配置「${field === "firstFrame" ? "首帧" : field === "lastFrame" ? "尾帧" : "参考图片"}」节点映射`);
+}
+
+async function submitZealman(context: ProviderContext, request: VideoRequest, model: ComfyWorkflowModel) {
+  const baseUrl = serviceUrl(context);
+  const workflowId = model.zealmanWorkflowId?.trim();
+  const values = record(model.zealmanInputs);
+  if (!workflowId || !values) throw new Error("Zealman 工作流缺少 workflow_id 或 input_values，请重新导入");
+  const inputValues = structuredClone(values);
+  const mapping = model.comfyMapping ?? {};
+  if (!mapping.prompt || !request.prompt.trim()) throw new Error("请配置正向提示词映射并填写视频提示词");
+  const images = selectedImages(request, mapping);
+  for (const { field, target } of images) {
+    if (target.nodeId !== "input_values" || !Object.hasOwn(inputValues, target.input)
+      || (inputValues[target.input] !== null && typeof inputValues[target.input] !== "string")) {
+      throw new Error(`Zealman 工作流的${field}映射不是有效的图片输入参数`);
+    }
+  }
+  const signal = requestSignal(context, 30 * 60_000);
+  for (const { field, input, target } of images) setZealmanInput(inputValues, target, field, await uploadZealmanImage(context, input, baseUrl, signal));
+  setZealmanInput(inputValues, mapping.prompt, "提示词", videoPrompt(request.prompt.trim()));
+  const size = dimensions(request.resolution, request.ratio);
+  if (size) {
+    setZealmanInput(inputValues, mapping.width, "宽度", size.width);
+    setZealmanInput(inputValues, mapping.height, "高度", size.height);
+  }
+  if (request.resolution) {
+    const resolutionValue = mapping.resolution && typeof inputValues[mapping.resolution.input] === "number"
+      ? Number(/^(\d{3,4})p?$/i.exec(request.resolution)?.[1]) : request.resolution;
+    setZealmanInput(inputValues, mapping.resolution, "分辨率", resolutionValue);
+  }
+  if (request.duration) {
+    if (mapping.duration && !mapping.durationUnit) throw new Error("Zealman 时长映射缺少单位，请按实际工作流配置");
+    if (mapping.durationUnit === "frames" && (!mapping.frameRate || !Number.isFinite(mapping.frameRate) || mapping.frameRate <= 0)) {
+      throw new Error("Zealman 帧数映射缺少实际帧率");
+    }
+    const duration = mapping.durationUnit === "frames" ? Math.round(request.duration * mapping.frameRate!) : request.duration;
+    setZealmanInput(inputValues, mapping.duration, "时长", duration);
+  }
+  if (mapping.frameRate) setZealmanInput(inputValues, mapping.fps, "帧率", mapping.frameRate);
+  const result = jsonObject(await requestJson(context, `${baseUrl}/api/workflow/generate`, "提交 Zealman 工作流", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workflow_id: workflowId, input_values: inputValues }),
+    signal: requestSignal(context, 120000),
+  }), "Zealman 提交结果");
+  if (result.success === false) throw new Error(`Zealman 拒绝了工作流：${context.tool.errorMessage(result.error ?? result.message)}`);
+  if (typeof result.prompt_id !== "string" || !result.prompt_id) throw new Error("Zealman 未返回 prompt_id");
+  const task: ComfyTaskData = { kind: "autodlComfyUi", protocol: "zealman", promptId: result.prompt_id,
+    model: request.model, baseUrlHash: String(context.tool.hash(baseUrl)), status: "queued" };
+  await context.saveTaskData?.(task);
+  return pollZealmanTask(context, task);
+}
+
+function selectedImages(request: VideoRequest, mapping: ComfyWorkflowModel["comfyMapping"]) {
+  const images: { field: string; input: MediaInput; target: ComfyInputMapping }[] = [];
+  const append = (field: string, input: MediaInput | undefined, target: ComfyInputMapping | undefined) => {
+    if (!input) throw new Error(`当前模式缺少必填的${field}，请在画布中添加图片`);
+    if (!target) throw new Error(`当前工作流没有配置「${field}」节点映射`);
+    images.push({ field, input, target });
+  };
+  const mode = request.mode;
+  if (Array.isArray(mode)) {
+    const count = Number(mode.find(item => item.startsWith("imageReference:"))?.split(":")[1] ?? 0);
+    const supplied = request.images ?? [];
+    if (!count && supplied.length) throw new Error("当前混合参考模式没有启用图片参考");
+    if (count && supplied.length < count) throw new Error(`当前模式需要 ${count} 张参考图，实际只有 ${supplied.length} 张，请补齐图片`);
+    if (supplied.length > count) throw new Error(`当前模式最多支持 ${count} 张参考图，实际有 ${supplied.length} 张`);
+    for (let index = 0; index < count; index++) append(`参考图 ${index + 1}`, supplied[index], mapping?.referenceImages?.[index]);
+  } else if (mode === "singleImage") {
+    if ((request.images?.length ?? 0) !== 1) throw new Error("单图参考模式需要恰好 1 张参考图");
+    append("单张参考图", request.images![0], mapping?.image);
+  } else if (["startEndRequired", "endFrameOptional", "startFrameOptional"].includes(String(mode))) {
+    if (mode === "startEndRequired" || mode === "endFrameOptional") append("首帧", request.firstFrame, mapping?.firstFrame);
+    else if (request.firstFrame) append("首帧", request.firstFrame, mapping?.firstFrame);
+    if (mode === "startEndRequired" || mode === "startFrameOptional") append("尾帧", request.lastFrame, mapping?.lastFrame);
+    else if (request.lastFrame) append("尾帧", request.lastFrame, mapping?.lastFrame);
+  } else if ((request.images?.length ?? 0) || request.firstFrame || request.lastFrame) throw new Error("文生视频模式不能传入参考图片");
+  const targets = images.map(({ target }) => `${target.nodeId}::${target.input}`);
+  if (new Set(targets).size !== targets.length) throw new Error("图片映射目标重复，请为每张参考图选择不同的工作流参数");
+  if (mapping?.prompt && targets.includes(`${mapping.prompt.nodeId}::${mapping.prompt.input}`)) {
+    throw new Error("图片与提示词不能映射到同一个工作流参数");
+  }
   return images;
 }
 
@@ -344,9 +474,10 @@ async function submit(context: ProviderContext, request: VideoRequest, model: Co
   if (!request.prompt.trim()) throw new Error("请输入视频提示词");
   const signal = requestSignal(context, 30 * 60_000);
   const images = selectedImages(request, mapping);
-  for (const { field, input } of images) {
+  for (const { field, target } of images) mappedInput(workflow, target, field);
+  for (const { field, input, target } of images) {
     const uploaded = await uploadImage(context, input, baseUrl, signal);
-    setMappedInput(workflow, mapping[field], field, uploaded);
+    setMappedInput(workflow, target, field, uploaded);
   }
   setMappedInput(workflow, mapping.prompt, "提示词", videoPrompt(request.prompt.trim()));
 
@@ -380,19 +511,36 @@ async function submit(context: ProviderContext, request: VideoRequest, model: Co
   return pollTask(context, task, model);
 }
 
-const provider = {
+export default {
   id: "autodlComfyUi",
   label: "AutoDL ComfyUI",
   icon: "",
   version,
-  readme,
+  readme: `AutoDL 自租 GPU 实例上的 ComfyUI API 接入，不使用 AutoDL.Art 工作流云端 API。
+
+在 AutoDL 启动 Zealman ComfyUI v9.50 等支持 API 的模板，映射 ComfyUI 端口（常用 6008），将外部 HTTP/HTTPS 地址填入服务地址。ComfyUI 默认无需 API 鉴权；使用反向代理鉴权时可选 Bearer、Basic Auth 或自定义请求头。
+
+在媒体模型设置中导入 ComfyUI 的「导出（API）」JSON，或含 workflow_id 与 input_values 的 Zealman JSON。普通界面工作流 JSON（含 nodes、links、widgets_values）不能直接提交。导入后按实际工作流选择提示词、图像、尺寸、时长等参数映射及生成模式，不根据参数名猜测含义。
+
+原生工作流使用 ComfyUI HTTP API：/upload/image、/prompt、/queue、/history/{prompt_id} 和 /view。Zealman 工作流导入包含 workflow_id 与 input_values 的 JSON，明确选择参数映射后使用 /api/workflow/generate 与 /api/workflow/result。两种模式都通过现有媒体任务流程写入当前工作区素材目录。`,
   rules,
   models: [],
 
   async testConnection(this: ProviderContext) {
-    const response = await this.tool.fetch(`${serviceUrl(this)}/system_stats`, {
+    const baseUrl = serviceUrl(this);
+    const response = await this.tool.fetch(`${baseUrl}/system_stats`, {
       headers: headers(this), signal: requestSignal(this, 10000), redirect: "error",
     });
+    if (response.status === 404 || response.status === 405) {
+      const probe = await this.tool.fetch(`${baseUrl}/api/workflow/result?prompt_id=toonflow-connection-check`, {
+        headers: headers(this), signal: requestSignal(this, 10000), redirect: "error",
+      });
+      const result = await probe.json().catch(() => undefined);
+      if (probe.status < 500 && probe.status !== 401 && probe.status !== 403 && record(result)
+        && ["success", "error", "pending", "results"].some(key => Object.hasOwn(result, key))) {
+        return "连接成功，Zealman 工作流 API 可访问（未提交生成任务）";
+      }
+    }
     if (!response.ok) {
       const message = this.tool.errorMessage(await response.text().catch(() => ""));
       throw new Error(`连接 AutoDL ComfyUI 失败（HTTP ${response.status}）${message ? `：${message}` : ""}`);
@@ -406,10 +554,10 @@ const provider = {
     const model = (this as ProviderContext & { models: ComfyWorkflowModel[] }).models.find(item => item.id === request.model && item.type === "video");
     if (!model) throw new Error("AutoDL ComfyUI 工作流不存在，请在媒体模型设置中重新导入");
     if (request.videos?.length || request.audios?.length) throw new Error("当前 AutoDL ComfyUI 工作流仅支持提示词和图片参考");
-    if (typeof request.mode !== "string" || !model.mode?.flatMap(mode => Array.isArray(mode) ? mode : [mode]).includes(request.mode)) {
+    if (!model.mode?.some(mode => JSON.stringify(mode) === JSON.stringify(request.mode))) {
       throw new Error("当前工作流未启用所选生成模式");
     }
-    return submit(this, request, model);
+    return model.zealmanWorkflowId ? submitZealman(this, request, model) : submit(this, request, model);
   },
 
   async resumeTask(this: ProviderContext, value: ProviderTaskData) {
@@ -420,8 +568,6 @@ const provider = {
     }
     const models = (this as ProviderContext & { models: ComfyWorkflowModel[] }).models;
     const model = models.find(item => item.id === task.model && item.type === "video");
-    return pollTask(this, task, model);
+    return task.protocol === "zealman" ? pollZealmanTask(this, task) : pollTask(this, task, model);
   },
 } satisfies ProviderDefinition<typeof rules> & { testConnection: (this: ProviderContext) => Promise<string> };
-
-export default provider;

@@ -117,15 +117,39 @@ async function saveProjectSnapshot(files: DramaWorkspaceFiles, project: DramaPro
 export async function readEpisodeScript(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, manifestPath = legacyManifestPath) {
   const episode = project.episodes.find(item => item.id === episodeId);
   if (!episode) throw new Error("目标分集不存在");
-  const draftPath = episode.draftPath ?? `${getProjectRoot(manifestPath)}/scripts/${episode.id}/draft.md`;
-  try {
-    const content = await files.readText(draftPath);
-    episode.draftPath = draftPath;
-    return content;
-  } catch (error) {
-    if (!(error instanceof Error) || !/404|ENOENT|不存在/i.test(error.message)) throw error;
+  const projectRoot = getProjectRoot(manifestPath);
+  const normalizePath = (value: string) => {
+    let path = value.replaceAll("\\", "/").replace(/^\.\//, "");
+    const projectPrefix = `${projectRoot}/`;
+    const projectPathIndex = path.indexOf(projectPrefix);
+    if (projectPathIndex >= 0) path = path.slice(projectPathIndex);
+    else if (path.startsWith("/")) {
+      const dramaPathIndex = path.indexOf(`${dataPath}/`);
+      if (dramaPathIndex < 0) return;
+      path = path.slice(dramaPathIndex);
+    } else if (!path.startsWith(`${dataPath}/`)) path = `${projectRoot}/${path}`;
+    if (path.split("/").some(part => part === ".." || /[<>:\"|?*\x00-\x1f]/.test(part))) return;
+    return path;
+  };
+  const defaultDraftPath = `${projectRoot}/scripts/${episode.id}/draft.md`;
+  const candidates = [...new Set([episode.draftPath ?? defaultDraftPath, episode.scriptPath].filter((path): path is string => !!path)
+    .map(normalizePath).filter((path): path is string => !!path))];
+  for (const path of candidates) {
+    const separator = path.lastIndexOf("/");
+    const parent = separator < 0 ? "" : path.slice(0, separator);
+    const name = separator < 0 ? path : path.slice(separator + 1);
+    try {
+      const { entries } = await files.list(parent);
+      if (entries.find(item => item.name === name)?.type !== "file") continue;
+      const content = await files.readText(path);
+      if (path === episode.draftPath || path === defaultDraftPath) episode.draftPath = path;
+      return content;
+    } catch (error) {
+      if (!isMissingError(error)) throw error;
+    }
   }
-  return episode.scriptPath ? files.readText(episode.scriptPath) : "";
+  if (episode.draftPath || episode.scriptPath) throw new Error("当前集的剧本路径无效或对应文件不存在，请检查项目数据目录");
+  return "";
 }
 
 export async function listDramaProjects(files: DramaWorkspaceFiles) {
