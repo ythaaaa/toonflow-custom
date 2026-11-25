@@ -27,9 +27,14 @@ apps/updateServer/build
 **/*.p12
 **/*.pfx
 **/*.p8
+**/*.keystore
+**/*.jks
 **/*.key
 **/*.pem
 **/*.keychain
 **/*.keychain-db
+**/compose.override.yaml
+**/compose.production.override.yaml
+**/.signing
 .DS_Store
 Thumbs.db

@@ -4,6 +4,7 @@ dist/
 /data/
 /work/
 /backup/
+/剧本/
 .playwright-mcp/
 playwright-report/
 test-results/
@@ -29,9 +30,16 @@ Thumbs.db
 *.p8
 *.keychain
 *.keychain-db
+*.keystore
+*.jks
+*.pem
+*.key
+*.mobileprovision
+.signing/
 .tmp/
 /codexBridge/bridge.pid
 /.m12-deploy-backup-20261121/
 /.m2-backup-20261121/
 /codexMcpTools.jsonl
 compose.production.override.yaml
+compose.override.yaml

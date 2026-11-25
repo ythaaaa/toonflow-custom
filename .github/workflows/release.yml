@@ -27,11 +27,10 @@ jobs:
     name: 构建所有平台版本
     uses: ./.github/workflows/debug.yml
     with:
-      target: all
+      target: allDesktop
       ref: ${{ inputs.ref || github.sha }}
       version: ${{ inputs.version || github.ref_name }}
       generatePatch: true
-      androidRelease: true
     secrets:
       MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
       MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -97,7 +96,6 @@ jobs:
           const macIntel = findInstaller("macOS x64", name => name === `toonflow-${version}-macos-x64.dmg`);
           const linux = findInstaller("Linux x64", name => name === `toonflow-${version}-linux-x64.deb`);
           const linuxArm = findInstaller("Linux ARM64", name => name === `toonflow-${version}-linux-arm64.deb`);
-          const android = findInstaller("Android ARM64", name => name === `toonflow-${version}-android-arm64.apk`);
           const baseUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/releases/download/v${version}`;
           const download = name => `${baseUrl}/${encodeURIComponent(name)}`;
           writeFileSync("releaseBody.md", [
@@ -113,7 +111,6 @@ jobs:
             `| 🍎 Mac（Intel 芯片） | [⬇️ 下载 Intel Mac 安装包](${download(macIntel)}) |`,
             `| 🐧 Linux（Intel / AMD，x64） | [⬇️ 下载 Linux x64 DEB](${download(linux)}) |`,
             `| 🐧 Linux（ARM64） | [⬇️ 下载 Linux ARM64 DEB](${download(linuxArm)}) |`,
-            `| 📱 Android（ARM64，Android 8 及以上） | [⬇️ 下载 Android APK](${download(android)}) |`,
             "",
             "> 💡 手动安装请选择上表中的链接。下方其他文件供软件自动更新使用。",
             "",
@@ -122,7 +119,6 @@ jobs:
             "- 💻 **Windows**：双击下载的安装包，按提示完成安装。ARM64 需要 .NET Framework 4.8.1，较新的 Windows 11 已内置。",
             "- 🍎 **Mac（macOS 14 及以上）**：打开下载的 `.dmg` 镜像，将 `toonflow.app` 拖入“应用程序”，复制完成后再从“应用程序”打开。",
             "- 🐧 **Linux（Debian / Ubuntu）**：选择对应架构的 DEB，在下载目录执行 `sudo apt install ./toonflow-版本号-linux-架构.deb`，安装后从应用菜单打开。",
-            "- 📱 **Android**：在手机上打开 APK，按系统提示允许此来源安装应用。后续版本可直接覆盖安装。",
             "",
             "两种 Mac 应用与 DMG 镜像均使用 Developer ID Application 签名，并完成 Apple 公证。首次打开时，macOS 仍可能提示确认打开从互联网下载的应用。",
             "旧版 Intel Mac 客户端首次迁移到统一 SDK 版本时，请下载完整 DMG 覆盖安装；旧版增量更新不能直接迁移。安装前请退出应用并备份原数据目录。",
@@ -175,9 +171,7 @@ jobs:
           parseUrl(uploadPutUrl, "上传接口地址");
           parseUrl(uploadGetPutUrl, "签名接口地址");
 
-          // ACT: Android APK 随 GitHub Release 发布，现有更新托管接口仅登记桌面版本。
-          const names = readdirSync("artifacts", { withFileTypes: true }).filter(entry => entry.isFile()).map(entry => entry.name)
-            .filter(name => name !== `toonflow-${version}-android-arm64.apk`);
+          const names = readdirSync("artifacts", { withFileTypes: true }).filter(entry => entry.isFile()).map(entry => entry.name);
           const targets = [
             { platform: "win", arch: "x64" },
             { platform: "win", arch: "arm64" },

@@ -11,6 +11,12 @@ const javaRoot = process.env.JAVA_HOME;
 const abis = ["arm64-v8a"];
 const version = config.app.version;
 const release = process.env.androidRelease === "1";
+const productionSigning = {
+  path: process.env.ANDROID_KEYSTORE_PATH,
+  storePassword: process.env.ANDROID_KEYSTORE_PASSWORD,
+  alias: process.env.ANDROID_KEY_ALIAS,
+  keyPassword: process.env.ANDROID_KEY_PASSWORD,
+};
 
 if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("Android 版本号必须为 X.Y.Z。");
 const [major, minor, patch] = version.split(".").map(Number);
@@ -21,14 +27,23 @@ if (![major, minor, patch].every(Number.isSafeInteger) || minor > 999 || patch >
 
 if (process.platform !== "win32") throw new Error("当前 Android 验证构建使用 Windows SDK，请在 Windows 上执行。");
 if (!sdkRoot) throw new Error("请设置 ANDROID_HOME 为 Android SDK 目录。");
+if (release) {
+  const missing = [
+    ["ANDROID_KEYSTORE_PATH", productionSigning.path],
+    ["ANDROID_KEYSTORE_PASSWORD", productionSigning.storePassword],
+    ["ANDROID_KEY_ALIAS", productionSigning.alias],
+    ["ANDROID_KEY_PASSWORD", productionSigning.keyPassword],
+  ].filter(([, value]) => !value?.trim()).map(([key]) => key);
+  if (missing.length) throw new Error(`Android Release 缺少外部签名配置：${missing.join("、")}。`);
+  if (!isAbsolute(productionSigning.path!)) throw new Error("ANDROID_KEYSTORE_PATH 必须是绝对路径。");
+  if (!existsSync(productionSigning.path!)) throw new Error("ANDROID_KEYSTORE_PATH 指向的签名文件不存在。");
+}
 
 function requireFile(path: string, help: string) {
   if (!existsSync(path)) throw new Error(`找不到 ${path}。${help}`);
   return path;
 }
 
-// ACT: 使用仓库内公开的默认签名，保证不同 CI 构建可覆盖安装；商店发布需改用专用签名。
-requireFile(join(mobileRoot, "native/defaultSigning.keystore"), "请使用包含默认签名文件的完整源码。");
 requireFile(join(sdkRoot, "platforms/android-37.1/package.xml"), "请使用 SDK Manager 安装 Android SDK Platform 37.1。");
 requireFile(join(sdkRoot, "platforms/android-37.1/android.jar"), "请安装 Android SDK Platform 37.1。");
 const aapt = requireFile(join(sdkRoot, "build-tools/36.0.0/aapt2.exe"), "请安装 Android SDK Build Tools 36.0.0。");

@@ -7,7 +7,7 @@ on:
         description: 构建平台
         type: choice
         default: windowsX64
-        options: [windowsX64, windowsArm64, macArm64, macX64, linuxX64, linuxArm64, androidArm64, all]
+        options: [windowsX64, windowsArm64, macArm64, macX64, linuxX64, linuxArm64, androidArm64, allDesktop, all]
       ref:
         description: 代码分支、标签或提交；签名构建要求与所选工作流版本为同一提交
         type: string
@@ -19,7 +19,7 @@ on:
         type: boolean
         default: false
       androidRelease:
-        description: Android 发布模式（R8 与资源裁剪，关闭调试，使用默认签名）
+        description: Android Release 模式（需要外部生产签名 Secrets）
         type: boolean
         default: false
   workflow_call:
@@ -54,6 +54,18 @@ on:
         required: false
       MACOS_NOTARIZATION_KEY_BASE64:
         description: 对应 API 密钥的 P8 私钥文件 Base64
+        required: false
+      ANDROID_KEYSTORE_BASE64:
+        description: Android 生产签名 keystore 的 Base64
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        description: Android 生产 keystore 密码
+        required: false
+      ANDROID_KEY_ALIAS:
+        description: Android 生产签名别名
+        required: false
+      ANDROID_KEY_PASSWORD:
+        description: Android 生产签名密码
         required: false
     outputs:
       version:
@@ -107,7 +119,7 @@ jobs:
             { target: "androidArm64", os: "windows-2025", platform: "win32", arch: "x64", releaseFolder: "build/mobile/releases" },
           ];
           const selected = process.env.buildTarget || "all";
-          const include = targets.filter(item => selected === "all" || item.target === selected);
+          const include = targets.filter(item => selected === "all" || (selected === "allDesktop" && item.target !== "androidArm64") || item.target === selected);
           if (!include.length) throw new Error(`不支持的构建平台：${selected}`);
           const refVersion = /^v\d+\.\d+\.\d+$/.test(process.env.buildRef ?? "") ? process.env.buildRef : "";
           const version = (process.env.buildVersion?.trim() || refVersion || config.app.version).replace(/^v/, "");
@@ -194,12 +206,38 @@ jobs:
         if: matrix.target == 'androidArm64'
         shell: pwsh
         run: bun run --cwd apps/mobile setup
+      - name: 准备 Android Release 外部签名
+        if: matrix.target == 'androidArm64' && inputs.androidRelease
+        shell: pwsh
+        env:
+          androidKeystoreBase64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          androidKeystorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          androidKeyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
+          androidKeyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          foreach ($name in @('androidKeystoreBase64', 'androidKeystorePassword', 'androidKeyAlias', 'androidKeyPassword')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { throw "缺少 Android Release Secret：$name" }
+          }
+          $keystorePath = Join-Path $env:RUNNER_TEMP 'toonflow-production.keystore'
+          $bytes = [Convert]::FromBase64String($env:androidKeystoreBase64)
+          if ($bytes.Length -eq 0) { throw 'Android Release keystore 内容为空' }
+          [IO.File]::WriteAllBytes($keystorePath, $bytes)
+          "ANDROID_KEYSTORE_PATH=$keystorePath" >> $env:GITHUB_ENV
       - name: 构建 Android APK
         if: matrix.target == 'androidArm64'
         shell: pwsh
         env:
           androidRelease: ${{ inputs.androidRelease && '1' || '0' }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: bun run --cwd apps/mobile build
+      - name: 清理 Android Release 签名文件
+        if: always() && matrix.target == 'androidArm64' && inputs.androidRelease
+        shell: pwsh
+        run: |
+          $keystorePath = Join-Path $env:RUNNER_TEMP 'toonflow-production.keystore'
+          if (Test-Path -LiteralPath $keystorePath) { Remove-Item -LiteralPath $keystorePath -Force }
       - name: 准备 macOS 签名与公证凭据
         if: matrix.platform == 'darwin'
         id: signing

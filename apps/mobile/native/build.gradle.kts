@@ -4,6 +4,14 @@ plugins {
 
 layout.buildDirectory.set(file("../../../build/mobile/native"))
 
+val productionStorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull?.takeIf(String::isNotBlank)
+val productionStorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull?.takeIf(String::isNotBlank)
+val productionKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull?.takeIf(String::isNotBlank)
+val productionKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").orNull?.takeIf(String::isNotBlank)
+val productionSigningConfigured = productionStorePath != null &&
+  productionStorePassword != null && productionKeyAlias != null && productionKeyPassword != null &&
+  java.io.File(productionStorePath).isAbsolute && file(productionStorePath).isFile
+
 android {
   namespace = "com.toonflow.mobile"
   compileSdk {
@@ -21,17 +29,18 @@ android {
   }
 
   signingConfigs {
-    create("defaultSigning") {
-      storeFile = file("defaultSigning.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+    if (productionSigningConfigured) {
+      create("production") {
+        storeFile = file(productionStorePath!!)
+        storePassword = productionStorePassword
+        keyAlias = productionKeyAlias
+        keyPassword = productionKeyPassword
+      }
     }
   }
   buildTypes {
-    debug { signingConfig = signingConfigs.getByName("defaultSigning") }
     release {
-      signingConfig = signingConfigs.getByName("defaultSigning")
+      if (productionSigningConfigured) signingConfig = signingConfigs.getByName("production")
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
@@ -56,6 +65,16 @@ android {
       useLegacyPackaging = true
       // ACT: 官方 Gecko 与 Bun 二进制已处理符号，保留原文件，避免安装 NDK 重新剥离。
       keepDebugSymbols += "**/*.so"
+    }
+  }
+}
+
+tasks.configureEach {
+  if (name == "assembleRelease" || name == "packageRelease" || name == "bundleRelease") {
+    doFirst {
+      check(productionSigningConfigured) {
+        "Android Release 需要外部签名配置：ANDROID_KEYSTORE_PATH、ANDROID_KEYSTORE_PASSWORD、ANDROID_KEY_ALIAS、ANDROID_KEY_PASSWORD。"
+      }
     }
   }
 }

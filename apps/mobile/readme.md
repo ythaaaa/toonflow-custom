@@ -49,21 +49,21 @@ bun run --cwd apps/mobile build
 
 `setup` 显式下载固定版本 ARM64 Android Bun 和 Gradle 9.6.0，校验 SHA256 后分别缓存到 `build/mobile/runtime`、`build/mobile/gradle`；随后由 AGP 9.4.0 自动安装所需 SDK，并准备 GeckoView 及其构建依赖，Gradle 缓存位于 `build/mobile/gradleHome`。SDK 自动安装要求该目录已接受许可。`build` 使用 `--offline` 并禁止 SDK 下载；缺少 SDK 或缓存时先重新执行 `setup`。GeckoView 的 Java、资源与 ARM64 原生内核由 Android 构建工具合并进 APK。
 
-`build` 先调用根目录的 `build:server`，构建节点、工具、扩展、前端、后端及 MCP，再将移动端服务与 MCP stdio 入口一起构建，共享重复依赖。APK 的 payload 包含 `server.js`、`stdio.js`、共享代码块、`web`、`nodes`、`tools`、`ext`、`providers`、`skills` 和 Photon 的 JS/WASM 包；团队保持当前仓库未内置打包的状态。payload 内容生成 `revision.txt`，用于随构建更新内置插件。发行包启用 R8 代码优化与资源裁剪，保留 Gecko 官方消费者规则及完整 ARM64 内核。
+`build` 先调用根目录的 `build:server`，构建节点、工具、扩展、前端、后端及 MCP，再将移动端服务与 MCP stdio 入口一起构建，共享重复依赖。APK 的 payload 包含 `server.js`、`stdio.js`、共享代码块、`web`、`nodes`、`tools`、`ext`、`providers`、`skills` 和 Photon 的 JS/WASM 包；团队保持当前仓库未内置打包的状态。payload 内容生成 `revision.txt`，用于随构建更新内置插件。Release 包启用 R8 代码优化与资源裁剪，保留 Gecko 官方消费者规则及完整 ARM64 内核。
 
-输出：`build/mobile/toonflowMobile.apk`。包名为 `com.toonflow.mobile`，最低 Android 8 / API 26，目标 API 34。本地和 CI 共用仓库内公开的默认签名 `native/defaultSigning.keystore`，别名为 `androiddebugkey`，密码均为 `android`。沿用此前本地默认签名，不再每次生成密钥，后续版本可直接覆盖安装并保留应用数据。
+输出：`build/mobile/toonflowMobile.apk`。包名为 `com.toonflow.mobile`，最低 Android 8 / API 26，目标 API 34。Debug 使用当前电脑 Android SDK 的标准本地调试签名。Release 必须配置独立的外部生产签名，环境变量为 `ANDROID_KEYSTORE_PATH`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 和 `ANDROID_KEY_PASSWORD`；缺少配置时构建会失败。仓库历史曾公开旧签名密钥，该密钥已不可信，不得继续用于发布或升级包。
 
 版本默认沿用 `electrobun.config.ts` 的 `app.version`，可通过 `appVersion` 指定 `X.Y.Z`。Android `versionCode` 按 `X × 1000000 + Y × 1000 + Z` 生成，Y、Z 不超过 999，结果须在 1–2100000000 内；更新时使用更高版本号。
 
 ## GitHub Actions
 
-在 Actions 中选择 **Debug build → Run workflow**，将 `target` 设为 `androidArm64` 可单独构建 ARM64 APK，选择 `all` 会同时构建桌面与 Android。版本留空时使用所选标签或项目配置。Android 默认生成 debug 包，可在本次运行的 Artifacts 或 Summary 中下载。开启 `androidRelease` 会启用 R8 和资源裁剪、关闭 `debuggable` 并去掉文件名中的 `-debug` 后缀；发布和分发应使用此模式。两种模式使用相同默认签名，无需配置 Android Secrets。
+在 Actions 中选择 **Debug build → Run workflow**，将 `target` 设为 `androidArm64` 可单独构建 ARM64 APK，选择 `all` 会同时构建桌面与 Android，选择 `allDesktop` 只构建桌面平台。版本留空时使用所选标签或项目配置。Android 默认生成由 CI 本机调试密钥签名的 Debug 包，可在本次运行的 Artifacts 或 Summary 中下载。只有配置独立的 Android 签名 Secrets 后，才可开启 `androidRelease`；该模式启用 R8 和资源裁剪、关闭调试并生成 Release 包。
 
-现有 **Release Toonflow** 工作流在推送 `vX.Y.Z` 标签或手动发布时，会并行构建桌面与 Android，全部成功后将 `toonflow-X.Y.Z-android-arm64.apk` 附加到同一个 GitHub Release。Android APK 暂不上传到桌面更新托管接口，应用内「前往 GitHub 更新」会打开最新发布页。
+现有 **Release Toonflow** 工作流在推送 `vX.Y.Z` 标签或手动发布时只构建桌面平台。Android 当前没有项目正式发行计划，因此默认发布工作流不会生成 Android Release APK。
 
-CI 使用 Windows 2025 自带 JDK 17 和已接受许可的 Android SDK 目录；依赖安装后，mobile `setup` 负责准备所需 SDK、GeckoView 与构建依赖，再执行离线 `build`。默认签名文件直接来自源码，Android 构建不读取签名 Secrets。
+CI 使用 Windows 2025 自带 JDK 17 和已接受许可的 Android SDK 目录；依赖安装后，mobile `setup` 负责准备所需 SDK、GeckoView 与构建依赖，再执行离线 `build`。Android Release 的 keystore 通过 Secrets 临时写入运行器目录，并在步骤结束后清理。
 
-本地需要复现发布构建时，设置 `androidRelease=1`，然后执行同一个 mobile `build` 命令。
+本地构建 Debug APK 时执行 `bun run --cwd apps/mobile build`。需要手动构建 Release 时，先在当前 PowerShell 会话安全设置独立签名所需的四个环境变量，再设置 `$env:androidRelease = '1'` 并执行同一命令；不要把密码写进脚本、仓库或命令历史。
 
 ## 安装到 ARM64 设备
 
