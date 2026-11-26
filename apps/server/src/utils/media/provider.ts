@@ -576,7 +576,7 @@ export async function loadMediaProviderSource(source: string, config: Record<str
   signal?.throwIfAborted();
   const definition = (module.namespace as { default: Provider }).default;
   const rules = Array.isArray(definition.rules) ? definition.rules : [];
-  const providerConfig = { ...Object.fromEntries(rules.map(rule => [rule.field, rule.value])), ...structuredClone(config) };
+  const providerConfig = { ...Object.fromEntries(rules.map(rule => [rule.field, rule.value])), ...JSON.parse(JSON.stringify(config)) };
   const provider = {
     ...definition,
     // 查询上下文使用原始注入 fetch，避免继承某次生成请求的取消信号。

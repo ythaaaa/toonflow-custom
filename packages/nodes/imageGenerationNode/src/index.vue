@@ -220,7 +220,7 @@ const generationInput = computed<Omit<NodeImageRequest, "directory"> | undefined
     ...getNodeModelIdentity(choice),
     prompt: generationPrompt.value,
     size: data.value.size,
-    ...(choice.imageRatios?.length ? { ratio: data.value.ratio } : {}),
+    ...(choice.providerId === "gptImageSubscription" || choice.imageRatios?.length ? { ratio: data.value.ratio } : {}),
     other: Object.keys(data.value.other).length ? { ...data.value.other } : undefined,
     outputDirectory: `assets/${id}`,
     images: references.flatMap(item => item.dataType === "IMAGE" && item.value ? [{ path: item.value.url, mimeType: item.value.mimeType }] : []),
@@ -472,7 +472,9 @@ nodeTools.register({
       : findNodeModel(models.value, { providerId: args.providerId ?? "", modelId: args.modelId });
     if (!choice) throw new Error("请选择 getConfig 返回的有效图片模型");
     const sizes = choice.imageSizes?.length ? choice.imageSizes : ["2K"];
-    const ratios = choice.imageRatios ?? ["16:9"];
+    const ratios = choice.providerId === "gptImageSubscription"
+      ? ["auto", "1:1", "16:9", "9:16"]
+      : choice.imageRatios ?? ["16:9"];
     if (args.size !== undefined && !sizes.includes(args.size)) throw new Error(`当前模型不支持分辨率 ${args.size}，可选：${sizes.join("、")}`);
     if (args.ratio !== undefined && !ratios.includes(args.ratio)) throw new Error(`当前模型不支持比例 ${args.ratio}，可选：${ratios.join("、")}`);
     const other = getModelFormValues(choice, choice === selectedModel.value ? data.value.other : {}, args.other);

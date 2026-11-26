@@ -49,20 +49,24 @@ const recordSchema = z.strictObject({
   createdAt: z.number().finite().nonnegative(), updatedAt: z.number().finite().nonnegative(),
   checkpoint: checkpointSchema,
   blobs: z.array(blobSchema).optional(),
-  result: z.strictObject({ code: z.number().int(), data: z.array(mediaSchema).nullable(), message: z.string() }).optional(),
+  result: z.strictObject({
+    code: z.number().int(),
+    data: z.union([z.array(mediaSchema), z.strictObject({ code: z.string().optional(), rawMessage: z.string().optional() })]).nullable(),
+    message: z.string(),
+  }).optional(),
 }).superRefine((record, context) => {
   const issue = (message: string) => context.addIssue({ code: "custom", message });
   if (!record.request || !record.mediaType) {
     if (!(["cancelled", "interrupted"].includes(record.state)) || record.request || record.mediaType) issue("任务缺少生成请求");
   } else if (!requestSchemas[record.mediaType].safeParse(record.request).success) issue("任务生成请求无效");
   if (record.state === "running" ? record.result !== undefined : record.result === undefined) issue("任务状态与结果不一致");
-  if (record.state === "succeeded" && (record.result?.code !== 200 || !record.result.data?.length)) issue("任务成功结果无效");
-  if (record.result && record.state !== "succeeded" && (record.result.code === 200 || record.result.data !== null)) issue("任务错误结果无效");
+  if (record.state === "succeeded" && (record.result?.code !== 200 || !Array.isArray(record.result.data) || !record.result.data.length)) issue("任务成功结果无效");
+  if (record.result && record.state !== "succeeded" && (record.result.code === 200 || Array.isArray(record.result.data))) issue("任务错误结果无效");
   const { assetCount, assets, files } = record.checkpoint;
   if (assets && (assetCount !== assets.length || assets.some(asset => asset.mediaType !== record.mediaType))) issue("任务媒体结果无效");
   if (files?.length && (assetCount === undefined || new Set(files.map(file => file.index)).size !== files.length
     || files.some(file => file.index >= assetCount || file.mediaType !== record.mediaType))) issue("任务文件索引无效");
-  if (record.result?.data?.some(file => file.mediaType !== record.mediaType)) issue("任务结果类型无效");
+  if (Array.isArray(record.result?.data) && record.result.data.some(file => file.mediaType !== record.mediaType)) issue("任务结果类型无效");
   if (record.blobs?.length && (!record.checkpoint.providerData || new Set(record.blobs.map(blob => JSON.stringify(blob.path))).size !== record.blobs.length)) issue("任务媒体引用无效");
 });
 
@@ -205,7 +209,7 @@ async function restoreBlobs(task: MediaTask) {
   if (!task.blobs.length) return;
   const source = task.record.checkpoint.providerData;
   if (!source) invalid("任务缺少媒体恢复数据");
-  const data = structuredClone(source);
+  const data = JSON.parse(JSON.stringify(source)) as ProviderTaskData;
   for (const blob of task.blobs) {
     let parent: ProviderTaskData[string] = data;
     for (const key of blob.path.slice(0, -1)) {
@@ -260,6 +264,11 @@ async function load(cwd: string, taskId: string, key: string, owner?: AuthIdenti
 async function resumable(task: MediaTask) {
   const { checkpoint, state } = task.record;
   if (state !== "running" && state !== "interrupted") return false;
+  if (task.record.request?.providerId === "autodlComfyUi") {
+    const providerData = checkpoint.providerData;
+    return !!providerData && providerData.kind === "autodlComfyUi" && typeof providerData.promptId === "string" && !!providerData.promptId
+      && typeof providerData.model === "string" && typeof providerData.baseUrlHash === "string" && typeof providerData.status === "string";
+  }
   if (checkpoint.providerData || checkpoint.assets?.length) return true;
   if (!checkpoint.assetCount || checkpoint.files?.length !== checkpoint.assetCount) return false;
   for (const file of checkpoint.files) {
@@ -287,12 +296,22 @@ function publicData(task: MediaTask) {
   return data;
 }
 
+function providerStatus(task: MediaTask) {
+  if (task.record.request?.providerId !== "autodlComfyUi") return undefined;
+  const status = task.record.checkpoint.providerData?.status;
+  if (status === "queued" || status === "pending" || status === "waiting") return "queued" as const;
+  if (status === "running" || status === "executing") return "running" as const;
+  return "unknown" as const;
+}
+
 async function snapshot(task: MediaTask, owner?: AuthIdentity | null) {
   const { taskId, state, nodeId, canvasPath, result } = task.record;
   const canResume = await resumable(task);
   // ACT: a just-stopped AutoDL submit may still be persisting prompt_id; keep polling enabled until that local request settles.
   const awaitingCheckpoint = task.active && state === "interrupted" && task.record.request?.providerId === "autodlComfyUi";
+  const cloudStatus = providerStatus(task);
   return { taskId, state, resumable: canResume || awaitingCheckpoint, nodeId, canvasPath,
+    ...(cloudStatus ? { providerStatus: cloudStatus } : {}),
     stage: task.record.checkpoint.stage, createdAt: task.record.createdAt,
     ...(owner?.role === "user" ? {} : { providerData: publicData(task) }), ...(result ? { result } : {}) };
 }
@@ -367,7 +386,7 @@ async function releaseCharge(task: MediaTask, notSubmitted = false) {
 
 async function reconcileCharge(task: MediaTask) {
   const previous = task.record.chargeStatus;
-  if (task.record.state === "succeeded") await settleCharge(task, task.record.result?.data ?? []);
+  if (task.record.state === "succeeded") await settleCharge(task, Array.isArray(task.record.result?.data) ? task.record.result.data : []);
   else if (["failed", "cancelled"].includes(task.record.state)) await releaseCharge(task);
   if (task.record.chargeStatus !== previous) await persist(task);
 }
@@ -422,7 +441,9 @@ async function execute(task: MediaTask, resume: boolean) {
         const notSubmitted = isMediaNotSubmitted(cause);
         record.state = notSubmitted || (cause as { code?: string } | null)?.code === "MEDIA_TASK_FAILED" ? "failed" : "interrupted";
         const result = errorFromCause(cause);
-        record.result = { ...result, code: result.code === 200 ? 500 : result.code, data: null };
+        const data = result.data && typeof result.data === "object" && !Array.isArray(result.data)
+          ? result.data as { code?: string; rawMessage?: string } : null;
+        record.result = { code: result.code === 200 ? 500 : result.code, data, message: result.message };
         await persist(task);
         if (record.state === "failed") await releaseCharge(task, notSubmitted);
       });
@@ -506,7 +527,11 @@ export async function start(cwd: string, taskId: string, mediaType: "image" | "v
       if (current.record.request && serialize({ mediaType: current.record.mediaType, request: current.record.request, nodeId: current.record.nodeId, canvasPath: current.record.canvasPath })
         !== serialize({ mediaType, request: parsed, nodeId: attachment.nodeId, canvasPath: attachment.canvasPath })) invalid("相同任务 ID 不能用于不同的生成请求", 409);
       if (current.persistenceError) await persist(current);
-      if (current.record.state === "running" && !current.active && await prepareCharge(current, true)) await launch(current, false);
+      if (current.record.state === "running" && !current.active) {
+        current.record.state = "interrupted";
+        current.record.result = error("本地执行已中断，云端状态待确认。请查询原任务，勿重复提交", null, 409);
+        await persist(current);
+      }
       await reconcileCharge(current);
       return snapshot(current, owner);
     }
@@ -551,13 +576,18 @@ export async function status(cwd: string, taskIds: string[], resume = false, own
       if (!task) return { taskId, state: "interrupted" as const, resumable: false, result: error<GeneratedMedia[]>("生成任务不存在", null, 404) };
       if (task.persistenceError) await persist(task);
       await reconcileCharge(task);
-      if (!task.active && task.record.state === "running" && await prepareCharge(task, true)) await launch(task, false);
-      if (!task.active && (task.record.state === "running" || (resume && task.record.state === "interrupted"))) {
+      if (!task.active && task.record.state === "running") {
+        task.record.state = "interrupted";
+        task.record.result = error("本地执行已中断，云端状态待确认。请查询原任务，勿重复提交", null, 409);
+        await persist(task);
+      }
+      if (!task.active && resume && task.record.state === "interrupted") {
         if (await resumable(task)) await launch(task, true);
         else {
-          task.record.state = "interrupted";
-          task.record.result ??= error("上次生成已中断，缺少可恢复的任务凭据，请先确认供应商任务状态", null, 409);
-          await persist(task);
+          if (!task.record.result) {
+            task.record.result = error("缺少原供应商任务凭据，云端状态无法自动确认。请人工核对后再继续", null, 409);
+            await persist(task);
+          }
         }
       }
       return snapshot(task, owner);
@@ -645,7 +675,7 @@ export async function wait(cwd: string, taskId: string, owner?: AuthIdentity | n
     })]);
     signal?.throwIfAborted();
     const result = task.record.result;
-    if (task.record.state === "succeeded" && result?.data) return result.data;
+    if (task.record.state === "succeeded" && Array.isArray(result?.data)) return result.data;
     throw Object.assign(new Error(result?.message ?? "媒体生成失败"), { status: result?.code ?? 500, taskId });
   } finally { if (abort) signal?.removeEventListener("abort", abort); }
 }

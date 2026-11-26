@@ -4,7 +4,7 @@ import { nodeTools, z } from "@toonflow/nodes-scaffold/nodeTools";
 import { useNodePersistence, type NodePersistenceContext } from "@toonflow/nodes-scaffold/nodeDocument";
 import type { NodeAudioRequest, NodeImageRequest, NodeMediaResult, NodeMediaTaskStatus, NodeVideoRequest, useNodeAi } from "@toonflow/nodes-scaffold/nodeAi";
 import type { NodeOutputs } from "@toonflow/nodes-scaffold/values";
-import { showNodeError } from "./showNodeError";
+import { getUserFacingError, showNodeError } from "./showNodeError";
 
 export type NodeGenerationTask = {
   taskId: string;
@@ -16,8 +16,11 @@ export type NodeGenerationTask = {
   modelId: string;
   state: "submitting" | NonNullable<NodeMediaTaskStatus["state"]>;
   stage?: NodeMediaTaskStatus["stage"];
+  providerStatus?: NodeMediaTaskStatus["providerStatus"];
+  cloudEndConfirmed?: boolean;
   startedAt?: number;
   lastError?: string;
+  lastErrorDetail?: string;
   resumable?: boolean;
   providerData?: unknown;
   recoveryData?: unknown;
@@ -39,19 +42,60 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
   let recoveryController: AbortController | undefined;
   let recovering: Promise<void> | undefined;
   let attemptedTaskId = "";
-  const status = ref<"idle" | "running" | "succeeded" | "failed">("idle");
+  const executionStatus = ref<"idle" | "running" | "succeeded" | "failed">("idle");
+  const status = computed(() => {
+    if (executionStatus.value !== "idle") return executionStatus.value;
+    const task = savedData.value.mediaTask;
+    return task?.state === "succeeded" ? "succeeded" : task?.state === "failed" ? "failed" : "idle";
+  });
   const error = ref("");
+  const errorDetail = ref("");
   const now = ref(Date.now());
   const cancelling = ref(false);
-  const generating = computed(() => status.value === "running");
+  const generating = computed(() => executionStatus.value === "running");
+  const taskId = computed(() => savedData.value.mediaTask?.taskId ?? "");
+  const providerTaskId = computed(() => {
+    const data = savedData.value.mediaTask?.providerData;
+    return data && typeof data === "object" && "promptId" in data && typeof data.promptId === "string" ? data.promptId : "";
+  });
   const elapsedSeconds = computed(() => generating.value ? Math.max(0, Math.floor((now.value - (savedData.value.mediaTask?.startedAt ?? now.value)) / 1000)) : 0);
   const generationStage = computed(() => {
-    if (recovering) return "恢复任务";
     const stage = savedData.value.mediaTask?.stage;
-    return stage ? ({ uploading: "上传素材", submitting: "提交任务", waiting: "等待云端生成", downloading: "下载结果", recovering: "恢复任务" } as const)[stage]
-      : !savedData.value.mediaTask || savedData.value.mediaTask?.state === "submitting" ? "准备请求" : "等待云端生成";
+    if (stage === "uploading") return "准备素材";
+    if (stage === "submitting") return "提交任务";
+    if (stage === "downloading") return "下载中";
+    if (stage === "recovering") {
+      if (savedData.value.mediaTask?.providerStatus === "running") return "生成中";
+      if (savedData.value.mediaTask?.providerStatus === "queued") return "排队中";
+      const data = savedData.value.mediaTask?.providerData;
+      if (data && typeof data === "object" && "status" in data) {
+        if (data.status === "running") return "生成中";
+        if (data.status === "queued") return "排队中";
+      }
+      return "等待云端确认";
+    }
+    if (stage === "waiting") {
+      if (savedData.value.mediaTask?.providerStatus === "running") return "生成中";
+      if (savedData.value.mediaTask?.providerStatus === "queued") return "排队中";
+      const data = savedData.value.mediaTask?.providerData;
+      if (data && typeof data === "object" && "status" in data) {
+        if (data.status === "running") return "生成中";
+        if (data.status === "queued") return "排队中";
+      }
+      return "等待云端确认";
+    }
+    if (savedData.value.mediaTask?.providerStatus === "running") return "生成中";
+    if (savedData.value.mediaTask?.providerStatus === "queued") return "排队中";
+    return !savedData.value.mediaTask || savedData.value.mediaTask.state === "submitting" ? "准备素材" : "等待云端确认";
   });
-  const generationError = computed(() => error.value || savedData.value.mediaTask?.lastError || "");
+  const generationError = computed(() => {
+    const task = savedData.value.mediaTask;
+    if (error.value) return error.value;
+    if (task?.state === "failed") return `生成失败：${task.lastError || "云端返回了失败状态"}`;
+    if (task?.state === "interrupted") return task.cloudEndConfirmed ? "" : task.lastError || "状态查询失败：云端状态暂时无法确认，请勿重复提交。";
+    return task?.lastError || "";
+  });
+  const generationErrorDetail = computed(() => errorDetail.value || savedData.value.mediaTask?.lastErrorDetail || "");
   let elapsedTimer: ReturnType<typeof setInterval> | undefined;
   watch(generating, active => {
     if (elapsedTimer) clearInterval(elapsedTimer);
@@ -60,12 +104,17 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
   }, { immediate: true });
   const pendingRecovery = computed(() => !generating.value && needsRecovery());
   const cloudTaskAwaiting = computed(() => savedData.value.mediaTask?.providerId === "autodlComfyUi" && needsRecovery());
+  const cloudTaskCanRequery = computed(() => cloudTaskAwaiting.value && savedData.value.mediaTask?.resumable === true);
   const cloudTaskNeedsManualConfirmation = computed(() => cloudTaskAwaiting.value && savedData.value.mediaTask?.state === "interrupted" && savedData.value.mediaTask.resumable === false);
   const taskMessage = computed(() => !cloudTaskAwaiting.value ? ""
     : savedData.value.mediaTask?.state === "succeeded"
-      ? "AutoDL 任务已完成，复查原任务可恢复视频结果。"
-      : "AutoDL 云端任务尚未确认结束。停止按钮只结束 Toonflow 本地等待；请复查原任务，确认结束前不能重新提交。");
-  const getStatus = () => ({ status: status.value, outputs: outputs.value, ...(error.value ? { error: error.value } : {}),
+      ? "AutoDL 任务已完成，重新查询可恢复视频结果。"
+      : cloudTaskNeedsManualConfirmation.value
+        ? "Toonflow 没有可查询的云端任务凭据，无法自动复查。请在 AutoDL 按提交时间核对；确认结束前会禁止重新提交。"
+        : savedData.value.mediaTask?.state === "interrupted" || generationError.value
+          ? "云端状态暂时无法确认，请勿重复提交。点击“重新查询云端状态”复查原任务。"
+        : "AutoDL 云端任务尚未确认结束。停止按钮只结束 Toonflow 本地等待；请重新查询原任务，确认结束前不能重新提交。");
+  const getStatus = () => ({ status: status.value, outputs: outputs.value, ...(generationError.value ? { error: generationError.value } : {}),
     ...(taskMessage.value ? { message: taskMessage.value } : {}),
     ...(savedData.value.mediaTask ? { task: { taskId: savedData.value.mediaTask.taskId, state: savedData.value.mediaTask.state, resumable: savedData.value.mediaTask.resumable } } : {}) });
 
@@ -89,7 +138,8 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
   function needsRecovery() {
     const task = savedData.value.mediaTask;
     // ACT: applied 仅在成功后释放任务；替换输出不能放弃仍可能已接单的任务。
-    return !!task && task.state !== "failed" && task.state !== "cancelled" && (task.state !== "succeeded" || !task.applied);
+    return !!task && task.state !== "failed" && task.state !== "cancelled"
+      && !(task.state === "interrupted" && task.cloudEndConfirmed) && (task.state !== "succeeded" || !task.applied);
   }
 
   function checkTask(task: NodeGenerationTask, context: NodePersistenceContext) {
@@ -109,21 +159,28 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
         checkTask(task, context);
         if (value.nodeId && value.nodeId !== id) throw new Error("生成任务不属于当前节点");
         if (value.canvasPath && value.canvasPath !== task.canvasPath) throw new Error("生成任务的原画布归属不一致");
-        const before = JSON.stringify([task.state, task.resumable, task.providerData, task.stage, task.startedAt, task.lastError]);
+        const before = JSON.stringify([task.state, task.resumable, task.providerStatus, task.providerData, task.stage, task.startedAt, task.lastError, task.lastErrorDetail]);
         if (value.state) task.state = value.state;
         if (value.stage) task.stage = value.stage;
+        if (value.providerStatus) task.providerStatus = value.providerStatus;
         if (value.createdAt && !task.startedAt) task.startedAt = value.createdAt;
         if (value.state === "failed") task.lastError = value.result?.message || "生成失败";
+        if (value.state === "failed" || (value.state === "interrupted" && value.result)) {
+          task.lastError = value.result?.message || task.lastError || "云端状态暂时无法确认，请勿重复提交";
+          const data = value.result?.data;
+          if (data && typeof data === "object" && !Array.isArray(data) && typeof data.rawMessage === "string") task.lastErrorDetail = data.rawMessage;
+        }
+        if (value.state === "running") { task.lastError = ""; task.lastErrorDetail = ""; }
         if (value.resumable !== undefined) task.resumable = value.resumable;
         if (value.providerData !== undefined) task.providerData = value.providerData;
-        if (before !== JSON.stringify([task.state, task.resumable, task.providerData, task.stage, task.startedAt, task.lastError])) {
+        if (before !== JSON.stringify([task.state, task.resumable, task.providerStatus, task.providerData, task.stage, task.startedAt, task.lastError, task.lastErrorDetail])) {
           const current = getPersistence?.();
           if (!current) throw new Error("画布已关闭，无法保存任务状态");
           await current.save(signal);
         }
         if (task.state === "interrupted" && task.resumable === false) {
           const nextStep = task.providerId === "autodlComfyUi"
-            ? "云端任务状态未知。请先在 AutoDL 核对任务；确认云端任务结束后，才能允许此节点重新提交。"
+            ? "Toonflow 没有可查询的云端任务凭据。请按提交时间在 AutoDL 核对；确认任务结束后，才能解除此节点的重复提交保护。"
             : "上次生成结果未知，可能已接单或扣费。请先核对供应商任务；如需重新生成，请点击“放弃任务”。";
           throw new Error([value.result?.message, nextStep].filter(Boolean).join("\n"));
         }
@@ -184,19 +241,35 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
     if (cancelling.value) throw new Error("任务正在取消，请稍后重试");
     if (generating.value) throw new Error("节点正在生成，请等待完成");
     const controller = executionController = new AbortController();
-    status.value = "running";
+    executionStatus.value = "running";
     now.value = Date.now();
     error.value = "";
+    errorDetail.value = "";
     try {
       const result = await action();
       await finish(AbortSignal.any([lifetime.signal, controller.signal]));
-      status.value = "succeeded";
+      executionStatus.value = "succeeded";
       return result;
     } catch (failure) {
-      status.value = "failed";
-      const message = (failure as { response?: { data?: { message?: string } } })?.response?.data?.message;
-      error.value = failure instanceof Error && failure.name === "AbortError" ? "生成已取消"
-        : message || (failure instanceof Error ? failure.message : "生成失败");
+      const task = savedData.value.mediaTask;
+      const cloudStatusUnknown = task?.providerId === "autodlComfyUi" && needsRecovery();
+      executionStatus.value = cloudStatusUnknown ? "idle" : "failed";
+      const friendlyError = getUserFacingError(failure, cloudStatusUnknown);
+      errorDetail.value = task?.lastErrorDetail || friendlyError.detail;
+      if (cloudStatusUnknown && task) {
+        error.value = `状态查询失败：${friendlyError.message}`;
+        task.lastError = error.value;
+        task.lastErrorDetail = errorDetail.value;
+        const current = getPersistence?.();
+        if (current?.directory === task.directory && findNode(id) === node && savedData.value.mediaTask?.taskId === task.taskId) {
+          try { await current.save(); }
+          catch (saveError) { console.warn("保存云端状态查询错误详情失败", saveError); }
+        }
+      } else if (task?.state === "failed") {
+        error.value = `生成失败：${task.lastError || friendlyError.message}`;
+      } else {
+        error.value = friendlyError.message;
+      }
       throw failure;
     } finally {
       if (executionController === controller) executionController = undefined;
@@ -288,7 +361,9 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
     const task = savedData.value.mediaTask;
     if (!path || !options || !task || generating.value || !needsRecovery() || attemptedTaskId === task.taskId) return;
     attemptedTaskId = task.taskId;
-    void resume().catch(error => { if (!lifetime.signal.aborted) showNodeError(error, "生成任务恢复失败"); });
+    void resume().catch(error => {
+      if (!lifetime.signal.aborted) showNodeError(generationError.value || error, "生成任务恢复失败", { detail: generationErrorDetail.value });
+    });
   }, { immediate: true, flush: "post" });
   watch(outputs, () => {
     // 保留用户替换或编辑的输出；未决任务仍须复查完成或明确放弃，不能借此重新提交。
@@ -302,13 +377,13 @@ export function useNodeGeneration(outputs: Readonly<Ref<NodeOutputs>>, cancel: (
     if (!task || task.providerId !== "autodlComfyUi" || task.state !== "interrupted" || task.resumable !== false || !context) {
       throw new Error("当前 AutoDL 任务还不能确认结束，请先复查任务状态");
     }
-    task.state = "failed";
-    task.resumable = false;
+    task.cloudEndConfirmed = true;
     task.applied = true;
     await context.save();
     error.value = "";
+    errorDetail.value = "";
   }
 
-  return { generating, pendingRecovery, cancelling, cloudTaskAwaiting, cloudTaskNeedsManualConfirmation, taskMessage,
-    generationStage, generationError, elapsedSeconds, run, generate, resume, cancel: cancelGeneration, confirmCloudTaskEnded };
+  return { generating, pendingRecovery, cancelling, cloudTaskAwaiting, cloudTaskCanRequery, cloudTaskNeedsManualConfirmation, taskMessage,
+    generationStage, generationError, generationErrorDetail, elapsedSeconds, taskId, providerTaskId, status, run, generate, resume, cancel: cancelGeneration, confirmCloudTaskEnded };
 }

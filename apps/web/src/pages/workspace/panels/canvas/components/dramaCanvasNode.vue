@@ -147,7 +147,7 @@ function selectNode() {
   strong, p { overflow-wrap: anywhere; }
   strong { font-size: 14px; }
   p { margin: 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
-  .nodeImage { display: block; width: 100%; max-height: 150px; object-fit: cover; border-radius: 6px; }
+  .nodeImage { display: block; width: 100%; max-height: 150px; object-fit: contain; border-radius: 6px; }
   .dramaHandle { width: 10px; height: 10px; border: 2px solid var(--el-color-primary); background: var(--el-bg-color); }
   .openEditorButton { justify-self: start; margin: 0; padding: 0; }
 }

@@ -40,7 +40,7 @@
       <div v-else class="videoEmpty" role="img" aria-label="暂无生成视频">
         <icon-camera-ai :size="48" stroke="1.25" aria-hidden="true" />
       </div>
-      <generationStatus :active="generating" :stage="generationStage" :elapsed="elapsedSeconds" :error="generationError" />
+      <generationStatus :active="generating" :stage="generationStage" :elapsed="elapsedSeconds" :error="generationError" :errorDetail="generationErrorDetail" :taskId="providerTaskId || taskId" />
     </div>
     <template #bottom>
       <el-card class="promptCard" shadow="never" :bodyStyle="{ padding: '14px 16px 12px' }">
@@ -91,16 +91,18 @@
           <div class="generationActions">
             <mediaPrice v-if="generationInput" :input="{ ...generationInput, mediaType: 'video' }" :supported="selectedModel?.supportsPrice === true" />
             <el-button v-if="cloudTaskNeedsManualConfirmation" text @click="confirmCloudTaskEnded">确认云端任务已结束</el-button>
+            <el-button v-else-if="pendingRecovery && cloudTaskAwaiting" text :disabled="cancelling || deleting || uploading || cloudTaskNeedsManualConfirmation" @click="requeryCloudTask">重新查询云端状态</el-button>
             <el-button v-else-if="pendingRecovery && !cloudTaskAwaiting" class="sendButton" :icon="IconPlayerStop" :loading="cancelling" :disabled="deleting || uploading" title="放弃任务" aria-label="放弃任务" @click="generationState.cancel().catch(error => showNodeError(error, '停止生成失败'))" />
             <el-button
               class="sendButton"
               :icon="generating ? IconPlayerStop : IconArrowUp"
-              :disabled="cancelling || deleting || uploading || cloudTaskNeedsManualConfirmation || (!generating && !pendingRecovery && (!generationPrompt || !selectedModel))"
-              :title="generating ? cloudTaskAwaiting ? '停止 Toonflow 本地等待，AutoDL 云端任务可能继续运行' : '停止生成' : pendingRecovery ? '复查原任务' : '生成视频'"
-              :aria-label="generating ? cloudTaskAwaiting ? '停止 Toonflow 本地等待，AutoDL 云端任务可能继续运行' : '停止生成' : pendingRecovery ? '复查原任务' : '生成视频'"
+              :disabled="cancelling || deleting || uploading || cloudTaskNeedsManualConfirmation || (cloudTaskAwaiting && !generating) || (!generating && !pendingRecovery && (!generationPrompt || !selectedModel))"
+              :title="generating ? cloudTaskAwaiting ? '停止 Toonflow 本地等待，AutoDL 云端任务可能继续运行' : '停止生成' : pendingRecovery ? cloudTaskAwaiting ? '请使用重新查询云端状态' : '复查原任务' : '生成视频'"
+              :aria-label="generating ? cloudTaskAwaiting ? '停止 Toonflow 本地等待，AutoDL 云端任务可能继续运行' : '停止生成' : pendingRecovery ? cloudTaskAwaiting ? '请使用重新查询云端状态' : '复查原任务' : '生成视频'"
               @click="generating ? generationState.cancel().catch(error => showNodeError(error, '停止生成失败')) : startGeneration().catch((error) => showNodeError(error, '视频生成失败'))" />
           </div>
           <p v-if="cloudTaskAwaiting" class="taskNotice" role="status">{{ taskMessage }}</p>
+          <p v-else-if="generationStatusValue === 'succeeded'" class="taskNotice" role="status">已完成 · 任务 ID：{{ providerTaskId || taskId }}</p>
         </div>
       </el-card>
     </template>
@@ -110,6 +112,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, ref, shallowRef, watch } from "vue";
+import { useVueFlow } from "@vue-flow/core";
 import { ElButton, ElCard, ElSelect, ElOption, ElOptionGroup, ElLoading, ElDropdown, ElDropdownMenu, ElDropdownItem, ElMessageBox } from "element-plus";
 import { IconCameraAi, IconSparkles, IconArrowUp, IconPlayerStop, IconTransfer, IconMusic, IconLayersSubtract, IconScissors, IconMovie, IconPhotoScan, IconPlayerSkipBack, IconPlayerSkipForward } from "@tabler/icons-vue";
 import { findNodeModel, getNodeModelIdentity, getNodeModelKey, nodeSkeleton, nodeTools, useNode, useNodeModelSelection, z, type NodeMediaModel, type NodeVideoRequest, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
@@ -143,8 +146,9 @@ const { id, node, nodeProps, nodeEvent, outputs, files, ai, updateNodeInternals 
   label: "视频生成",
   onModelsChanged: () => void refreshProviderModels(),
 });
+const { findNode } = useVueFlow();
 type PromptModel = NonNullable<InstanceType<typeof promptInput>["$props"]["modelValue"]>;
-const data = computed(() => node.data as { prompt: string; promptModel: PromptModel; model: string; duration?: number; resolution: string; ratio: string; mode: string; generateAudio: boolean; other: Record<string, unknown> });
+const data = computed(() => node.data as { prompt: string; promptModel: PromptModel; model: string; duration?: number; resolution: string; ratio: string; mode: string; generateAudio: boolean; other: Record<string, unknown>; shotId?: string });
 data.value.prompt ??= "";
 data.value.promptModel ??= [];
 data.value.model ??= "";
@@ -169,14 +173,24 @@ const generationState = useNodeGeneration(outputs, async () => {
   generationController?.abort();
   await generation;
 }, { ai });
-const { generating, pendingRecovery, cancelling, cloudTaskAwaiting, cloudTaskNeedsManualConfirmation, taskMessage,
-  generationStage, generationError, elapsedSeconds } = generationState;
+const { generating, pendingRecovery, cancelling, cloudTaskAwaiting, cloudTaskCanRequery, cloudTaskNeedsManualConfirmation, taskMessage,
+  generationStage, generationError, generationErrorDetail, elapsedSeconds, taskId, providerTaskId, status: generationStatusValue } = generationState;
 let modelsRequest: Promise<void> | undefined;
 watch(generating, value => { if (!value && !disposed && !deleting.value && !models.value.length) void loadModels().catch(error => showNodeError(error, "模型读取失败")); });
 // ACT: 供应商未声明视频比例范围，沿用界面的通用比例，具体支持范围由供应商校验。
 const ratioOptions = ["16:9", "9:16", "1:1", "4:3", "3:4"];
+const u17WorkflowId = "API-U17-9图1视频3音频V1-api";
 const selectedModel = useNodeModelSelection(models, computed({ get: () => data.value.model, set: value => { data.value.model = value; } }));
 useModelForm(data, selectedModel);
+function isU17Model(choice?: NodeMediaModel) {
+  return choice?.providerId === "autodlComfyUi" && choice.workflowId === u17WorkflowId;
+}
+function getU17Default(choice: NodeMediaModel, field: string, fallback: number) {
+  const configured = choice.workflowFieldSettings?.[field]?.defaultValue;
+  if (typeof configured === "number" && Number.isFinite(configured)) return configured;
+  const ruleValue = choice.rules?.find(item => item.field === field)?.value;
+  return typeof ruleValue === "number" && Number.isFinite(ruleValue) ? ruleValue : fallback;
+}
 const selectedMode = computed(() => selectedModel.value?.mode?.find((item) => JSON.stringify(item) === data.value.mode) as NodeVideoRequest["mode"]);
 const frameMode = computed(() => ["startEndRequired", "endFrameOptional", "startFrameOptional"].includes(String(selectedMode.value)));
 const mediaCounts = computed(() => ({
@@ -201,13 +215,16 @@ function getMatchingModes(choice?: NodeMediaModel) {
 }
 
 function getDurations(choice: NodeMediaModel) {
-  return [...new Set((choice.durationResolutionMap ?? []).flatMap((item) => item.duration))].sort((a, b) => a - b);
+  if (isU17Model(choice)) return [];
+  const values = [...new Set((choice.durationResolutionMap ?? []).flatMap((item) => item.duration))].sort((a, b) => a - b);
+  return values;
 }
 
 function getResolutions(choice: NodeMediaModel, duration?: number) {
+  if (isU17Model(choice)) return [];
   // ACT: 当前视频分辨率使用 p 单位；出现其他单位时再统一换算。
-  return [...new Set((choice.durationResolutionMap ?? []).filter((item) => item.duration.includes(duration!)).flatMap((item) => item.resolution))]
-    .sort((left, right) => (Number.parseFloat(left) || Infinity) - (Number.parseFloat(right) || Infinity));
+  const values = [...new Set((choice.durationResolutionMap ?? []).filter((item) => item.duration.includes(duration!)).flatMap((item) => item.resolution))];
+  return values.sort((left, right) => (Number.parseFloat(left) || Infinity) - (Number.parseFloat(right) || Infinity));
 }
 // ACT: 引用改变时只替换不适用的模式；普通媒体优先作为参考，避免自动变成首尾帧。
 watch([selectedModel, matchingModes, () => data.value.mode], ([choice, matches]) => {
@@ -219,12 +236,17 @@ watch([selectedModel, matchingModes, () => data.value.mode], ([choice, matches])
   data.value.mode = mode === undefined ? "" : JSON.stringify(mode);
 }, { flush: "sync" });
 // ACT: 参数在节点内归一化，未选中、未挂载底部设置时也可由 Agent 直接生成。
+watch(selectedModel, choice => {
+  if (choice && isU17Model(choice) && data.value.duration === undefined) data.value.duration = getU17Default(choice, "duration", 5);
+}, { immediate: true, flush: "sync" });
 watch([selectedModel, () => data.value.duration], ([choice]) => {
   if (!choice) return;
-  const durations = getDurations(choice);
-  if (!durations.includes(data.value.duration!)) data.value.duration = durations[0];
-  const resolutions = getResolutions(choice, data.value.duration);
-  if (!resolutions.includes(data.value.resolution)) data.value.resolution = resolutions[0] ?? "";
+  if (!isU17Model(choice)) {
+    const durations = getDurations(choice);
+    if (!durations.includes(data.value.duration!)) data.value.duration = durations[0];
+    const resolutions = getResolutions(choice, data.value.duration);
+    if (!resolutions.includes(data.value.resolution)) data.value.resolution = resolutions[0] ?? "";
+  }
   if (!ratioOptions.includes(data.value.ratio)) data.value.ratio = "9:16";
   if (choice.audio !== "optional") data.value.generateAudio = choice.audio === true;
 }, { flush: "sync" });
@@ -270,10 +292,20 @@ function getGenerationInput(prompt: string): Omit<NodeVideoRequest, "directory">
     prompt: getGenerationPrompt(prompt, references, choice.preservePromptWhitespace),
     mode: selectedMode.value,
     duration: data.value.duration,
-    resolution: data.value.resolution || undefined,
+    resolution: isU17Model(choice) ? undefined : data.value.resolution || undefined,
     ratio: data.value.ratio,
     generateAudio: choice.audio === "optional" ? data.value.generateAudio : choice.audio,
-    other: Object.keys(data.value.other).length ? { ...data.value.other } : undefined,
+    other: (() => {
+      const other = { ...data.value.other };
+      if (isU17Model(choice)) {
+        for (const field of ["megapixels", "upscale"] as const) {
+          if (!Object.hasOwn(other, field)) other[field] = getU17Default(choice, field, field === "megapixels" ? 0.9 : 1);
+        }
+        const ratioRule = choice.rules?.find(item => item.field === "aspectRatio");
+        if (!Object.hasOwn(other, "aspectRatio") && typeof ratioRule?.value === "string") other.aspectRatio = ratioRule.value;
+      }
+      return Object.keys(other).length ? other : undefined;
+    })(),
     outputDirectory: `assets/${id}`,
     images: frameMode.value ? undefined : images,
     firstFrame,
@@ -283,6 +315,19 @@ function getGenerationInput(prompt: string): Omit<NodeVideoRequest, "directory">
     referenceOrder: referenceOrder.map(reference => frameMode.value && reference.type === "image"
       ? { type: reference.index === 0 && firstFrame ? "firstFrame" : "lastFrame" } : reference),
   };
+}
+function getMissingU17RequiredFields(choice: NodeMediaModel, input: Omit<NodeVideoRequest, "directory">) {
+  return Object.entries(choice.workflowFieldSettings ?? {}).flatMap(([id, settings]) => {
+    if (!settings.required) return [];
+    if (id === "prompt") return input.prompt.trim() ? [] : [settings.businessName ?? id];
+    if (id === "aspectRatio") return typeof input.other?.aspectRatio === "string" ? [] : [settings.businessName ?? id];
+    if (id === "megapixels" || id === "upscale") return typeof input.other?.[id] === "number" ? [] : [settings.businessName ?? id];
+    if (id === "duration") return typeof input.duration === "number" ? [] : [settings.businessName ?? id];
+    const reference = /^(image|video|audio)Reference:(\d+)$/.exec(id);
+    if (!reference) return Object.hasOwn(input.other ?? {}, id) ? [] : [settings.businessName ?? id];
+    const list = reference[1] === "image" ? input.images : reference[1] === "video" ? input.videos : input.audios;
+    return (list?.length ?? 0) > Number(reference[2]) ? [] : [settings.businessName ?? id];
+  });
 }
 const outputFile = computed(() => outputs.value.video?.dataType === "VIDEO" ? outputs.value.video.value : undefined);
 const previewUrl = files.useFileUrl(
@@ -346,6 +391,8 @@ function loadModels() {
       ...item,
       durationResolutionMap: item.durationResolutionMap?.map(row => ({ ...row,
         resolution: row.resolution.map(value => /^\d{3,4}$/.test(value) ? `${value}p` : value) })),
+      resolutionParameterMappings: item.resolutionParameterMappings?.map(row => ({ ...row,
+        resolution: /^\d{3,4}$/.test(row.resolution) ? `${row.resolution}p` : row.resolution })),
     } : item);
     // ACT: 只给空配置选默认模型，保留暂时不可用的旧选择及其参数。
     if (!data.value.model) {
@@ -365,7 +412,7 @@ async function startGeneration() {
   if (uploading.value) throw new Error("视频正在替换，请等待完成");
   if (deleting.value) throw new Error("节点正在删除");
   if (pendingRecovery.value) {
-    generation = generationState.resume().catch(error => showNodeError(error, "视频任务复查失败"));
+    generation = generationState.resume().catch(error => showNodeError(generationError.value || error, "视频任务复查失败", { detail: generationErrorDetail.value }));
     return { status: "generating" };
   }
   const choice = selectedModel.value;
@@ -378,6 +425,18 @@ async function startGeneration() {
   }) : data.value.prompt;
   const input = getGenerationInput(prompt);
   if (!choice || !input) throw new Error("请先选择视频模型");
+  if (isU17Model(choice)) {
+    if (!Number.isInteger(input.duration) || input.duration! < 5 || input.duration! > 15) {
+      throw new Error("U17 视频时长必须是 5～15 秒之间的整数");
+    }
+    for (const [field, value] of [["megapixels", input.other?.megapixels], ["放大倍率", input.other?.upscale]] as const) {
+      if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) throw new Error(`${field}必须是有限正数`);
+    }
+  }
+  if (isU17Model(choice)) {
+    const missing = getMissingU17RequiredFields(choice, input);
+    if (missing.length) throw new Error(`缺少 U17 必填参数：${missing.join("、")}`);
+  }
   if (!input.prompt) throw new Error("请输入生成提示词");
   if (refList.value.some(item => item.value === undefined)) throw new Error("引用节点暂无内容，请先补充引用内容");
   for (const match of input.prompt.matchAll(/\{\{ref (\d+)\}\}/g)) {
@@ -385,6 +444,12 @@ async function startGeneration() {
     if (reference?.dataType === "STRING" && !reference.value?.trim()) throw new Error(`参考 ${match[1]} 的文本为空，请补充内容或移除提示词中的引用`);
   }
   if (choice.mode?.length && !matchingModes.value.length) throw new Error("当前模型没有适合这些参考素材的生成模式，请更换模型或调整引用");
+  const shotIds = [...new Set(refList.value.flatMap(reference => {
+    const binding = findNode(reference.source)?.data?.dramaBinding as { shotId?: unknown } | undefined;
+    return typeof binding?.shotId === "string" && binding.shotId ? [binding.shotId] : [];
+  }))];
+  if (shotIds.length > 1) throw new Error("参考素材来自多个镜头，无法确定视频所属的 shotId");
+  if (shotIds[0]) data.value.shotId = shotIds[0];
   const workspace = files.getWorkspaceFiles();
   const controller = new AbortController();
   generationController = controller;
@@ -400,7 +465,7 @@ async function startGeneration() {
       if (!result) throw new Error("供应商未返回视频");
       outputs.value.video = { dataType: "VIDEO", value: { url: result.path, mimeType: result.mimeType } };
     }))
-    .catch((error) => showNodeError(error, "视频生成失败"))
+    .catch((error) => showNodeError(generationError.value || error, "视频生成失败", { detail: generationErrorDetail.value }))
     .finally(() => {
       generationController = undefined;
     });
@@ -420,16 +485,40 @@ async function confirmCloudTaskEnded() {
   }
 }
 
+function requeryCloudTask() {
+  if (!pendingRecovery.value || !cloudTaskAwaiting.value || cloudTaskNeedsManualConfirmation.value) return;
+  generation = generationState.resume().catch(error => showNodeError(generationError.value || error, "云端任务状态查询失败", { detail: generationErrorDetail.value }));
+}
+
 nodeEvent.on("save", (reason) => {
   if (reason === "reload" && (generating.value || uploading.value || deleting.value)) throw new Error("视频处理中，请完成后再刷新节点");
 });
 nodeEvent.on("delete", async () => {
   if (uploading.value) throw new Error("视频正在替换，请稍后删除节点");
+  const cloudTaskMayContinue = cloudTaskAwaiting.value;
+  if (cloudTaskMayContinue) {
+    const taskReference = providerTaskId.value
+      ? `Zealman prompt_id：${providerTaskId.value}`
+      : cloudTaskCanRequery.value
+        ? `Toonflow 任务 ID：${taskId.value || "未知"}（云端凭据保存在服务端任务记录中）`
+        : `Toonflow 任务 ID：${taskId.value || "未知"}（没有可查询的云端凭据）`;
+    await ElMessageBox.confirm(
+      `删除此节点只会移除画布中的本地节点及其本地输出，不会取消 AutoDL 云端任务。${taskReference} 可能继续运行并产生 GPU 费用。${cloudTaskCanRequery.value ? "可先重新查询原云端任务。" : "删除前请人工核对云端状态。"}`,
+      "删除仍有关联云端任务的视频节点？",
+      { confirmButtonText: "删除本地节点", cancelButtonText: "保留节点", type: "warning", closeOnClickModal: false },
+    );
+  }
   deleting.value = true;
   try {
-    await generationState.cancel(false);
-    if (cloudTaskAwaiting.value) throw new Error("AutoDL 云端任务尚未确认结束，已停止本地等待但保留此节点；请复查或确认任务结束后再删除");
-    await generation;
+    if (cloudTaskMayContinue) {
+      generationController?.abort();
+      try { await generationState.cancel(false); }
+      catch (error) { console.warn("停止 AutoDL 本地等待失败，继续删除已确认的本地节点", error); }
+      await generation?.catch(() => {});
+    } else {
+      await generationState.cancel(false);
+      await generation;
+    }
     await files.removeNodeFiles();
   } finally {
     deleting.value = false;
@@ -450,7 +539,7 @@ function getConfig() {
       providerId: selectedModel.value?.providerId ?? "",
       modelId: selectedModel.value?.modelId ?? "",
       duration: data.value.duration,
-      resolution: data.value.resolution,
+      resolution: isU17Model(selectedModel.value) ? undefined : data.value.resolution,
       ratio: data.value.ratio,
       mode: selectedMode.value,
       generateAudio: data.value.generateAudio,
@@ -464,7 +553,7 @@ function getConfig() {
 
 nodeTools.register({
   name: "getConfig",
-  description: "读取此视频生成节点的当前配置、自定义配置 other、可选视频模型能力、通用比例及适合当前引用的模式，models 中的 rules 声明自定义字段，不含密钥；时长与分辨率须符合 durationResolutionMap",
+  description: "读取此视频生成节点的当前配置、自定义配置 other、可选视频模型能力、通用比例及适合当前引用的模式，models 中的 rules 声明自定义字段，不含密钥；U17 的时长、megapixels 和放大倍率按工作流数字参数传递，支持范围由 Zealman 节点校验",
   parameters: z.strictObject({}),
   async execute(_args, { signal }) {
     signal?.throwIfAborted();
@@ -496,18 +585,24 @@ nodeTools.register({
     const choice = args.modelId === undefined ? selectedModel.value
       : findNodeModel(models.value, { providerId: args.providerId ?? "", modelId: args.modelId });
     if (!choice) throw new Error("请选择 getConfig 返回的有效视频模型");
+    const u17 = isU17Model(choice);
+    if (u17 && args.resolution !== undefined) throw new Error("U17 通过 megapixels 输入分辨率参数，不接受固定分辨率档位");
+    if (u17 && args.duration !== undefined && (!Number.isInteger(args.duration) || args.duration < 5 || args.duration > 15)) {
+      throw new Error("U17 视频时长必须是 5～15 秒之间的整数");
+    }
     const durations = getDurations(choice);
-    if (args.duration !== undefined && !durations.includes(args.duration)) throw new Error(`当前模型不支持时长 ${args.duration}，可选：${durations.join("、")}`);
-    const duration = args.duration ?? (durations.includes(data.value.duration!) ? data.value.duration : durations[0]);
+    if (!u17 && args.duration !== undefined && !durations.includes(args.duration)) throw new Error(`当前模型不支持时长 ${args.duration}，可选：${durations.join("、")}`);
+    const duration = u17 ? args.duration ?? data.value.duration ?? getU17Default(choice, "duration", 5)
+      : args.duration ?? (durations.includes(data.value.duration!) ? data.value.duration : durations[0]);
     const resolutions = getResolutions(choice, duration);
-    if (args.resolution !== undefined && !resolutions.includes(args.resolution)) throw new Error(`当前时长不支持分辨率 ${args.resolution}，可选：${resolutions.join("、")}`);
-    const resolution = args.resolution ?? (resolutions.includes(data.value.resolution) ? data.value.resolution : resolutions[0] ?? "");
+    if (!u17 && args.resolution !== undefined && !resolutions.includes(args.resolution)) throw new Error(`当前时长不支持分辨率 ${args.resolution}，可选：${resolutions.join("、")}`);
+    const resolution = u17 ? data.value.resolution : args.resolution ?? (resolutions.includes(data.value.resolution) ? data.value.resolution : resolutions[0] ?? "");
     if (args.mode !== undefined && !getMatchingModes(choice).some((item) => JSON.stringify(item) === JSON.stringify(args.mode))) throw new Error("所选模式不受当前模型支持或不适用于当前引用，请根据模型能力及已连接素材选择");
     if (args.generateAudio !== undefined && choice.audio !== "optional" && args.generateAudio !== (choice.audio === true)) throw new Error("当前模型不支持切换声音，请查看 getConfig 返回的 audio 能力");
     const other = getModelFormValues(choice, choice === selectedModel.value ? data.value.other : {}, args.other);
     data.value.model = getNodeModelKey(choice);
     data.value.duration = duration;
-    data.value.resolution = resolution;
+    if (!u17) data.value.resolution = resolution ?? "";
     if (args.ratio !== undefined) data.value.ratio = args.ratio;
     if (args.mode !== undefined) data.value.mode = JSON.stringify(args.mode);
     if (args.generateAudio !== undefined) data.value.generateAudio = args.generateAudio;

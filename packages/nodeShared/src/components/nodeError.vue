@@ -1,7 +1,11 @@
 <template>
   <div class="nodeErrorContent">
-    <div class="errorLabel">错误详情</div>
-    <div class="errorDetail" tabindex="0">{{ message }}</div>
+    <div class="errorLabel">错误说明</div>
+    <div class="errorMessage" tabindex="0">{{ message }}</div>
+    <details v-if="detail && detail !== message" class="errorDetails">
+      <summary>错误详情（开发者）</summary>
+      <div class="errorDetail" tabindex="0">{{ detail }}</div>
+    </details>
     <div v-if="references?.length" class="errorReferences">
       <div class="errorLabel">本次参考图片</div>
       <ul><li v-for="reference in references" :key="reference">{{ reference }}</li></ul>
@@ -39,7 +43,7 @@ import { getNodeModelIdentity, getNodeModelKey, useNodeAi, useNodeModelSelection
 import { groupNodeModels } from "../groupNodeModels";
 import modelLabel from "./modelLabel.vue";
 
-const props = defineProps<{ message: string; context: string; references?: string[]; safetyRejected?: boolean; signal: AbortSignal }>();
+const props = defineProps<{ message: string; detail?: string; context: string; references?: string[]; safetyRejected?: boolean; signal: AbortSignal }>();
 const ai = useNodeAi({ onModelsChanged: async () => { models.value = await ai.getModels(props.signal); } });
 const explaining = ref(false);
 const explanation = ref("");
@@ -114,11 +118,19 @@ async function explainError() {
       font-size: 12px;
     }
 
+    .errorMessage,
     .errorDetail {
       max-height: 20vh;
       overflow: auto;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }
+
+    .errorDetails {
+      margin-top: 8px;
+
+      summary { color: var(--el-text-color-secondary); cursor: pointer; }
+      .errorDetail { margin-top: 4px; }
     }
 
     .errorReferences,

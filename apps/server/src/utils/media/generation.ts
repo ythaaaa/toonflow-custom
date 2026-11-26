@@ -69,16 +69,22 @@ export async function listMediaModels(): Promise<MediaModel[]> {
   return installedProviders.filter(provider => provider.id !== "toonflow" || !!getAccountProvider()).flatMap(provider => provider.models.flatMap(model => {
     if (model.type !== "image" && model.type !== "video" && model.type !== "audio") return [];
     const builtIn = (mediaProviders as readonly Provider[]).find(item => item.id === provider.id)?.models.find(item => item.id === model.id);
-    const workflow = model as typeof model & { zealmanWorkflowId?: unknown; zealmanInputs?: unknown; comfyMapping?: { prompt?: { nodeId?: string; input?: string } } };
+    const workflow = model as typeof model & { zealmanWorkflowId?: unknown; zealmanInputs?: unknown; comfyMapping?: { prompt?: { nodeId?: string; input?: string }; fieldSettings?: unknown } };
+    const u17Workflow = provider.id === "autodlComfyUi" && workflow.zealmanWorkflowId === "API-U17-9图1视频3音频V1-api";
+    if (u17Workflow && model.enabled === false) return [];
     const preservePromptWhitespace = provider.id === "autodlComfyUi" && model.type === "video"
-      && workflow.zealmanWorkflowId === "API-U17-9图1视频3音频V1-api"
+      && u17Workflow
       && record(workflow.zealmanInputs).prompt !== undefined && workflow.comfyMapping?.prompt?.nodeId === "input_values"
       && workflow.comfyMapping.prompt.input === "prompt";
     return [{
       providerId: provider.id, providerLabel: provider.label, modelId: model.id, label: model.label, type: model.type,
       supportsPrice: "supportsPrice" in provider && provider.supportsPrice === true,
       rules: model.rules,
-      mode: model.mode, durationResolutionMap: model.durationResolutionMap, audio: model.audio,
+      mode: model.mode, durationResolutionMap: model.durationResolutionMap,
+      audio: u17Workflow && model.audio === undefined ? "optional" : model.audio,
+      ...(u17Workflow ? { workflowId: workflow.zealmanWorkflowId as string, enabled: model.enabled !== false,
+        resolutionParameterMappings: Array.isArray(model.resolutionParameterMappings) ? model.resolutionParameterMappings : undefined,
+        workflowFieldSettings: record(workflow.comfyMapping?.fieldSettings) as MediaModel["workflowFieldSettings"] } : {}),
       ...(preservePromptWhitespace ? { preservePromptWhitespace: true } : {}),
       ...(model.type === "audio" ? { voices: model.voices } : {}),
       ...(model.type === "image" ? {

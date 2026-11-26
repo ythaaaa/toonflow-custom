@@ -86,9 +86,13 @@ export interface MediaModel {
   label: string;
   type: "image" | "video" | "audio";
   mode?: unknown;
+  workflowId?: string;
+  enabled?: boolean;
   imageSizes?: string[];
   imageRatios?: string[];
   durationResolutionMap?: { duration: number[]; resolution: string[] }[];
+  resolutionParameterMappings?: { duration: number; resolution: string; values: Record<string, unknown> }[];
+  workflowFieldSettings?: Record<string, { businessName?: string; dataType?: string; defaultValue?: unknown; required?: boolean; options?: unknown[]; transform?: string }>;
   preservePromptWhitespace?: boolean;
   audio?: boolean | "optional";
   voices?: { title: string; voice: string }[];

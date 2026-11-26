@@ -17,7 +17,12 @@ const imageQualities: Record<string, readonly string[]> = {
   "gpt-image-2.5-flare": ["auto", "low", "medium", "high", "xhigh", "max"],
   "gpt-image-2.5-sunburst": ["auto", "low", "medium", "high", "xhigh", "max"],
 };
-const ratioSizes: Record<string, string> = { "1:1": "1024x1024", "16:9": "1536x864", "9:16": "864x1536", auto: "auto" };
+const ratioSizes: Record<string, readonly string[]> = {
+  auto: ["auto"],
+  "1:1": ["1024x1024", "2048x2048"],
+  "16:9": ["1536x864", "3072x1728"],
+  "9:16": ["864x1536", "1728x3072"],
+};
 const directory = join(dirname(conf.path), "gptImageSubscription");
 const authPath = join(directory, "auth.json");
 type AuthRecord = { accessToken: string; refreshToken: string; expiresAt: number; accountId: string; email: string };
@@ -125,6 +130,35 @@ function validateImageSize(size: string) {
   if (width % 16 !== 0 || height % 16 !== 0 || long > 3840 || long > short * 3 || pixels < 655360 || pixels > 8294400)
     throw new Error("画布尺寸超出 GPT Image 支持的范围");
 }
+function ratioForSize(size: string) {
+  return Object.entries(ratioSizes).find(([ratio, sizes]) => ratio !== "auto" && sizes.includes(size))?.[0];
+}
+function promptWithRatio(prompt: string, ratio?: string) {
+  if (!ratio) return prompt;
+  const direction = ratio === "1:1" ? "方形" : ratio === "16:9" ? "横向宽屏" : "竖向";
+  return `${prompt}\n\n请按 ${ratio} 宽高比构图，使用${direction}画幅。`;
+}
+function requestedAspectRatio(ratio: string | undefined, size: string) {
+  if (ratio && ratio !== "auto") {
+    const [width, height] = ratio.split(":").map(Number);
+    return width && height ? width / height : undefined;
+  }
+  const match = /^(\d+)x(\d+)$/.exec(size);
+  if (!match) return undefined;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return width && height ? width / height : undefined;
+}
+function validateReturnedAspectRatio(size: string, ratio: string | undefined, width: number, height: number) {
+  const expected = requestedAspectRatio(ratio, size);
+  if (!expected || !width || !height) return;
+  const actual = width / height;
+  // Allow small upstream dimension rounding while rejecting a clearly different canvas orientation.
+  if (Math.abs(actual - expected) / expected <= 0.08) return;
+  const requestedLabel = ratio && ratio !== "auto" ? `${ratio} / ${size}` : size;
+  const orientation = actual > 1.08 ? "横向" : actual < 0.92 ? "竖向" : "方形";
+  throw new Error(`上游返回图片实际尺寸 ${width}×${height}（${orientation}），与请求画幅 ${requestedLabel} 不符；该结果未标记为成功。`);
+}
 function inputImage(image: MediaInput) {
   let data: string;
   if (image.type === "base64") data = image.data;
@@ -147,11 +181,13 @@ export async function generateSubscriptionImage(request: Input, signal?: AbortSi
   const quality = request.quality ?? "auto";
   if (!qualities.includes(quality)) throw new Error(`模型 ${request.model} 不支持画质 ${quality}`);
   const ratio = request.ratio;
-  const size = request.size ?? (ratio ? ratioSizes[ratio] : "auto");
+  if (ratio && ratio !== "auto" && !ratioSizes[ratio]) throw new Error("画幅比例仅支持 1:1、16:9、9:16 或 auto");
+  const size = request.size ?? (ratio ? ratioSizes[ratio]?.[0] : "auto");
   if (!size) throw new Error("旧版画幅仅支持 1:1、16:9、9:16 或 auto；请使用宽x高分辨率");
-  if (request.size && ratio && ratio !== "auto" && ratioSizes[ratio] !== request.size)
+  if (request.size && ratio && ratio !== "auto" && !ratioSizes[ratio]?.includes(request.size))
     throw new Error("所选画幅与分辨率不一致");
   validateImageSize(size);
+  const outputRatio = ratio && ratio !== "auto" ? ratio : ratioForSize(size);
   const images = request.images ?? [];
   if (images.length > 5) throw new Error("最多选择 5 张参考图");
   const auth = await freshAuth();
@@ -161,7 +197,7 @@ export async function generateSubscriptionImage(request: Input, signal?: AbortSi
       method: "POST", redirect: "error", signal: controller,
       headers: { authorization: `Bearer ${auth.accessToken}`, "chatgpt-account-id": auth.accountId,
         originator: "codex_cli_rs", "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ prompt, background: "auto", model: request.model, quality, size, ...(images.length ? { images: images.map(inputImage) } : {}) }),
+      body: JSON.stringify({ prompt: promptWithRatio(prompt, outputRatio), background: "auto", model: request.model, quality, size, ...(images.length ? { images: images.map(inputImage) } : {}) }),
     });
     const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
     if (!response.ok) {
@@ -175,6 +211,7 @@ export async function generateSubscriptionImage(request: Input, signal?: AbortSi
     const bytes = Buffer.from(encoded, "base64");
     if (!bytes.length || bytes.length > 100 * 1024 * 1024) throw new Error("上游图片为空或超过 100 MB");
     const info = imageInfo(bytes);
+    validateReturnedAspectRatio(size, ratio, info.width, info.height);
     return [{ type: "base64", data: bytes.toString("base64"), mimeType: info.mimeType, mediaType: "image" }];
   } catch (error) {
     throw new Error(safeMessage(error, auth));

@@ -119,13 +119,14 @@ const mediaPriceCache = mediaPriceCacheHost[mediaPriceCacheKey] ??= (() => {
 })();
 
 export type NodeMediaResult = NodeImageResult | NodeVideoResult | NodeAudioResult;
-type MediaTaskResult = { code: number; data: NodeMediaResult[] | null; message: string };
+type MediaTaskResult = { code: number; data: NodeMediaResult[] | { code?: string; rawMessage?: string } | null; message: string };
 export type NodeMediaTaskStatus = {
   taskId: string;
   state?: "running" | "interrupted" | "succeeded" | "failed" | "cancelled";
   stage?: "uploading" | "submitting" | "waiting" | "downloading" | "recovering";
   createdAt?: number;
   resumable?: boolean;
+  providerStatus?: "queued" | "running" | "unknown";
   providerData?: unknown;
   nodeId?: string;
   canvasPath?: string;
@@ -202,7 +203,7 @@ function createMediaTasks() {
   function wait(directory: string, taskId: string, signal: AbortSignal, options: NodeMediaTaskOptions = {}, resume = false) {
     signal.throwIfAborted();
     if (pending.has(taskId)) throw new Error("生成任务已在当前窗口查询，请等待查询结束");
-    return new Promise<NonNullable<MediaTaskResult["data"]>>((resolve, reject) => {
+    return new Promise<NodeMediaResult[]>((resolve, reject) => {
       const cleanup = () => {
         if (pending.get(taskId) === task) pending.delete(taskId);
         signal.removeEventListener("abort", abort);
@@ -215,7 +216,7 @@ function createMediaTasks() {
         onStatus: options.onStatus,
         finish(result) {
           cleanup();
-          if (result.code === 200 && result.data) resolve(result.data);
+          if (result.code === 200 && Array.isArray(result.data)) resolve(result.data);
           else reject(new Error(result.message || "媒体生成失败"));
         },
         fail(error) { cleanup(); reject(error); },

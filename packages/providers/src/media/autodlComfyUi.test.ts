@@ -118,17 +118,28 @@ describe("AutoDL ComfyUI API provider", () => {
 
 describe("AutoDL Zealman multi-image mapping", () => {
   const image = (index: number) => ({ type: "binary" as const, data: new Uint8Array([index]), mimeType: "image/png", name: `image-${index}.png` });
-  function createZealmanContext() {
-    const calls: { path: string; init: RequestInit }[] = [];
+  function createZealmanContext(options: {
+    promptId?: string;
+    submittedStatus?: string;
+    statuses?: Record<string, unknown>[];
+    failResult?: Error;
+  } = {}) {
+    const calls: { path: string; url: string; init: RequestInit }[] = [];
+    const savedTasks: Record<string, unknown>[] = [];
+    const stages: string[] = [];
+    let statusIndex = 0;
     const fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const path = new URL(String(input)).pathname;
-      calls.push({ path, init });
+      calls.push({ path, url: String(input), init });
       if (path === "/api/comfy/upload/file") {
         const file = (init.body as FormData).get("file") as File;
-        return Response.json({ url: `/input/${file.name}` });
+        return Response.json({ name: file.name });
       }
-      if (path === "/api/workflow/generate") return Response.json({ prompt_id: "mock-zealman-001" });
-      if (path === "/api/workflow/result") return Response.json({ status: "success", results: [{ type: "video", url: "/output/mock.mp4" }] });
+      if (path === "/api/workflow/generate") return Response.json({ prompt_id: options.promptId ?? "mock-zealman-001", status: options.submittedStatus });
+      if (path === "/api/workflow/result") {
+        if (options.failResult) throw options.failResult;
+        return Response.json(options.statuses?.[statusIndex++] ?? { status: "success", results: [{ type: "video", url: "/output/mock.mp4" }] });
+      }
       if (path === "/output/mock.mp4") return new Response(new Uint8Array([0, 0, 0, 24]), { headers: { "content-type": "video/mp4" } });
       throw new Error(`Unexpected mock request: ${path}`);
     };
@@ -136,15 +147,22 @@ describe("AutoDL Zealman multi-image mapping", () => {
     const mapping = (input: string) => ({ nodeId: "input_values", input });
     const context = {
       config: { baseUrl: "http://autodl.test:6008", authType: "none" },
-      models: [{ id: "zealman", label: "Zealman", type: "video", mode: [["imageReference:3"]],
+      models: [{ id: "zealman", label: "Zealman", type: "video", mode: ["text", ["imageReference:3"]],
         zealmanWorkflowId: "workflow-1", zealmanInputs: inputs,
         comfyMapping: { prompt: mapping("prompt"), referenceImages: [0, 1, 2].map(index => mapping(`ref_image_${index}`)),
           width: mapping("width"), height: mapping("height"), resolution: mapping("resolution") } }],
       signal: new AbortController().signal,
-      saveTaskData: async () => {},
-      tool: { fetch, hash: Bun.hash, errorMessage: (value: unknown) => String(value ?? "") },
+      reportStage: async (stage: string) => { stages.push(stage); },
+      saveTaskData: async (data: Record<string, unknown>) => { savedTasks.push(structuredClone(data)); },
+      tool: { fetch, hash: Bun.hash, errorMessage: (value: unknown) => typeof value === "object" && value !== null && "message" in value
+        ? String((value as { message: unknown }).message)
+        : typeof value === "object" && value !== null && "error" in value
+          ? String((value as { error: unknown }).error && typeof (value as { error: unknown }).error === "object"
+            && "message" in (value as { error: Record<string, unknown> }).error
+            ? ((value as { error: { message: unknown } }).error.message) : (value as { error: unknown }).error)
+          : String(value ?? "") },
     };
-    return { context, calls };
+    return { context, calls, savedTasks, stages, options };
   }
 
   it("uploads all canvas images in order and maps 480p to numeric resolution", async () => {
@@ -154,8 +172,8 @@ describe("AutoDL Zealman multi-image mapping", () => {
       resolution: "480p", ratio: "16:9",
     });
     const submitted = JSON.parse(String(calls.find(call => call.path === "/api/workflow/generate")?.init.body));
-    expect(submitted.input_values).toMatchObject({ prompt: "move camera", ref_image_0: "/input/image-1.png",
-      ref_image_1: "/input/image-2.png", ref_image_2: "/input/image-3.png", width: 856, height: 480, resolution: 480 });
+    expect(submitted.input_values).toMatchObject({ prompt: "move camera", ref_image_0: "image-1.png",
+      ref_image_1: "image-2.png", ref_image_2: "image-3.png", width: 856, height: 480, resolution: 480 });
     expect(calls.map(call => call.path)).toEqual([
       "/api/comfy/upload/file", "/api/comfy/upload/file", "/api/comfy/upload/file",
       "/api/workflow/generate", "/api/workflow/result", "/output/mock.mp4",
@@ -169,5 +187,62 @@ describe("AutoDL Zealman multi-image mapping", () => {
       model: "zealman", mode: ["imageReference:3"], prompt: "move camera", images: [image(1), image(2)],
     })).rejects.toThrow("需要 3 张参考图");
     expect(calls).toHaveLength(0);
+  });
+
+  it("distinguishes queued, unknown processing, running, download and completed media", async () => {
+    const { context, savedTasks, stages } = createZealmanContext({ statuses: [
+      { status: "processing", pending: true },
+      { status: "processing" },
+      { status: "processing", pending: false },
+      { status: "running" },
+      { status: "completed", results: [{ type: "video", url: "/output/mock.mp4" }] },
+    ] });
+    const result = await provider.generateVideo!.call(context as never, {
+      model: "zealman", mode: "text", prompt: "status mock",
+    });
+
+    expect(savedTasks.map(task => task.status)).toEqual(["unknown", "queued", "unknown", "running"]);
+    expect(stages).toEqual(["submitting", "waiting", "downloading"]);
+    expect(result[0]?.mediaType).toBe("video");
+  }, 15000);
+
+  it("preserves the cloud failure reason as a true generation failure", async () => {
+    const { context } = createZealmanContext({ statuses: [{ status: "failed", error: { message: "GPU execution failed" } }] });
+    await expect(provider.generateVideo!.call(context as never, {
+      model: "zealman", mode: "text", prompt: "failure mock",
+    })).rejects.toMatchObject({ code: "MEDIA_TASK_FAILED", message: "GPU execution failed" });
+  });
+
+  it("retains prompt_id after a network query failure and rechecks the same task without submitting again", async () => {
+    const { context, calls, savedTasks, options } = createZealmanContext({ failResult: new TypeError("fetch failed") });
+    await expect(provider.generateVideo!.call(context as never, {
+      model: "zealman", mode: "text", prompt: "network failure mock",
+    })).rejects.toMatchObject({ code: "MEDIA_TASK_STATUS_QUERY_FAILED", rawMessage: "fetch failed" });
+    expect(savedTasks[0]).toMatchObject({ promptId: "mock-zealman-001", status: "unknown" });
+
+    options.failResult = undefined;
+    options.statuses = [{ status: "completed", results: [{ type: "video", url: "/output/mock.mp4" }] }];
+    const resumed = await provider.resumeTask!.call(context as never, savedTasks[0] as never);
+    expect(resumed[0]?.mediaType).toBe("video");
+    expect(calls.filter(call => call.path === "/api/workflow/generate")).toHaveLength(1);
+    expect(calls.filter(call => call.path === "/api/workflow/result").map(call => new URL(call.url).searchParams.get("prompt_id")))
+      .toEqual(["mock-zealman-001", "mock-zealman-001"]);
+  });
+
+  it("keeps concurrent task states isolated by their own provider context", async () => {
+    const first = createZealmanContext({ promptId: "mock-queued", statuses: [
+      { status: "queued", pending: true }, { status: "success", results: [{ type: "video", url: "/output/mock.mp4" }] },
+    ] });
+    const second = createZealmanContext({ promptId: "mock-running", statuses: [
+      { status: "running" }, { status: "success", results: [{ type: "video", url: "/output/mock.mp4" }] },
+    ] });
+    await Promise.all([first, second].map(({ context }) => provider.generateVideo!.call(context as never, {
+      model: "zealman", mode: "text", prompt: "concurrent status mock",
+    })));
+
+    expect(first.savedTasks.map(task => task.status)).toEqual(["unknown", "queued"]);
+    expect(second.savedTasks.map(task => task.status)).toEqual(["unknown", "running"]);
+    expect(first.savedTasks.every(task => task.promptId === "mock-queued")).toBe(true);
+    expect(second.savedTasks.every(task => task.promptId === "mock-running")).toBe(true);
   });
 });

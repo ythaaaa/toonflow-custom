@@ -18,6 +18,7 @@ type ComfyWorkflowModel = ProviderModel & {
     resolution?: ComfyInputMapping;
     aspectRatio?: ComfyInputMapping;
     megapixels?: ComfyInputMapping;
+    multiple?: ComfyInputMapping;
     upscale?: ComfyInputMapping;
     duration?: ComfyInputMapping;
     fps?: ComfyInputMapping;
@@ -129,10 +130,26 @@ function jsonObject(value: unknown, label: string) {
   return result;
 }
 
+function cloneWorkflowJson<T>(value: T): T {
+  const seen = new WeakSet<object>();
+  const check = (item: unknown): void => {
+    if (item === null || typeof item === "string" || typeof item === "boolean") return;
+    if (typeof item === "number" && Number.isFinite(item)) return;
+    if (!item || typeof item !== "object" || seen.has(item) || (!Array.isArray(item) && Object.prototype.toString.call(item) !== "[object Object]")) {
+      throw new Error("工作流参数必须是非循环的 JSON，不能包含 File、Blob 或其他媒体对象");
+    }
+    seen.add(item);
+    for (const child of Object.values(item)) check(child);
+    seen.delete(item);
+  };
+  check(value);
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 async function jsonResponse(response: Response, label: string, context: ProviderContext) {
   if (!response.ok) {
     const message = context.tool.errorMessage(await response.text().catch(() => ""));
-    throw new Error(`${label}失败（HTTP ${response.status}）${message ? `：${message}` : ""}`);
+    throw Object.assign(new Error(`${label}失败（HTTP ${response.status}）${message ? `：${message}` : ""}`), { status: response.status });
   }
   try { return await response.json(); }
   catch { throw new Error(`${label}返回的不是有效 JSON`); }
@@ -151,7 +168,8 @@ function validateWorkflow(value: unknown): Record<string, { class_type: string; 
       throw new Error(`API 工作流节点 ${nodeId} 缺少 class_type 或 inputs`);
     }
     const meta = record(node._meta);
-    result[nodeId] = { class_type: node.class_type, inputs, ...(typeof meta?.title === "string" ? { _meta: { title: meta.title } } : {}) };
+    // ACT: 每次提交复制 JSON 节点参数；媒体对象只走独立的上传路径。
+    result[nodeId] = { class_type: node.class_type, inputs: cloneWorkflowJson(inputs), ...(typeof meta?.title === "string" ? { _meta: { title: meta.title } } : {}) };
   }
   return result;
 }
@@ -245,6 +263,7 @@ async function pollTask(context: ProviderContext, task: ComfyTaskData, model: Co
   if (!context.signal) throw new Error("AutoDL ComfyUI 任务恢复缺少取消信号");
   const baseUrl = serviceUrl(context);
   if (String(context.tool.hash(baseUrl)) !== task.baseUrlHash) throw new Error("AutoDL 服务地址已变更，请恢复原服务地址后查询此任务");
+  await context.reportStage?.("waiting");
   const signal = requestSignal(context, 30 * 60_000);
   let lastStatus = task.status;
   while (true) {
@@ -260,6 +279,7 @@ async function pollTask(context: ProviderContext, task: ComfyTaskData, model: Co
       const complete = status?.completed === true || ["success", "succeeded", "completed"].includes(state) || (!state && files.length > 0);
       if (complete) {
         if (!files.length) throw Object.assign(new Error("ComfyUI 任务已完成，但所选输出节点没有返回视频文件"), { code: "MEDIA_TASK_FAILED" });
+        await context.reportStage?.("downloading");
         const assets: MediaAsset[] = [];
         for (const file of files) {
           signal.throwIfAborted();
@@ -322,6 +342,7 @@ function mediaBytes(input: MediaInput, context: ProviderContext, signal: AbortSi
 }
 
 async function uploadImage(context: ProviderContext, input: MediaInput, baseUrl: string, signal: AbortSignal) {
+  await context.reportStage?.("uploading");
   const source = await mediaBytes(input, context, signal, "image");
   if (!source.bytes.length || source.bytes.byteLength > 100 * 1024 * 1024) throw new Error("图生视频参考图为空或超过 100 MB");
   const form = new FormData();
@@ -361,6 +382,14 @@ function setZealmanInput(values: Record<string, unknown>, mapping: ComfyInputMap
   values[mapping.input] = converted;
 }
 
+function zealmanTaskStatus(statusValue: unknown, pending: unknown): "queued" | "running" | "unknown" {
+  const status = String(statusValue ?? "").toLowerCase();
+  if (["queued", "pending", "waiting"].includes(status)) return "queued";
+  if (["running", "executing"].includes(status)) return "running";
+  if (status === "processing" && typeof pending === "boolean") return pending ? "queued" : "running";
+  return pending === true ? "queued" : "unknown";
+}
+
 async function pollZealmanTask(context: ProviderContext, task: ComfyTaskData) {
   if (!context.signal) throw new Error("AutoDL ComfyUI 任务恢复缺少取消信号");
   const baseUrl = serviceUrl(context);
@@ -369,11 +398,19 @@ async function pollZealmanTask(context: ProviderContext, task: ComfyTaskData) {
   const signal = requestSignal(context, 30 * 60_000);
   while (true) {
     signal.throwIfAborted();
-    const result = jsonObject(await requestJson(context, `${baseUrl}/api/workflow/result?prompt_id=${encodeURIComponent(task.promptId)}`, "查询 Zealman 任务", {
-      signal: requestSignal(context, 30000),
-    }), "Zealman 任务结果");
-    if (result.success === false || ["failed", "failure", "error"].includes(String(result.status ?? "").toLowerCase())) {
-      throw Object.assign(new Error(context.tool.errorMessage(result.error ?? result.message) || "Zealman 工作流执行失败"), { code: "MEDIA_TASK_FAILED" });
+    let result: Record<string, unknown>;
+    try {
+      result = jsonObject(await requestJson(context, `${baseUrl}/api/workflow/result?prompt_id=${encodeURIComponent(task.promptId)}`, "查询 Zealman 任务", {
+        signal: requestSignal(context, 30000),
+      }), "Zealman 任务结果");
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      throw Object.assign(new Error(detail), { code: "MEDIA_TASK_STATUS_QUERY_FAILED", rawMessage: detail,
+        ...((cause as { status?: number } | null)?.status ? { status: (cause as { status: number }).status } : {}), cause });
+    }
+    const status = String(result.status ?? "").toLowerCase();
+    if (["failed", "failure", "error", "rejected", "cancelled", "canceled", "expired"].includes(status)) {
+      throw Object.assign(new Error(context.tool.errorMessage(result) || "Zealman 工作流执行失败"), { code: "MEDIA_TASK_FAILED" });
     }
     const video = Array.isArray(result.results) ? result.results.map(record).find(item => item?.type === "video" && typeof item.url === "string") : undefined;
     if (video) {
@@ -389,11 +426,16 @@ async function pollZealmanTask(context: ProviderContext, task: ComfyTaskData) {
       if (!bytes.length) throw new Error("Zealman 返回了空视频文件");
       return [{ type: "binary", data: bytes, mimeType: response.headers.get("content-type")?.split(";")[0] || videoMimeType(url.pathname), mediaType: "video" }] satisfies MediaAsset[];
     }
-    if (result.pending === false || ["success", "succeeded", "completed"].includes(String(result.status ?? "").toLowerCase())) {
+    if (["success", "succeeded", "completed"].includes(status)) {
       throw Object.assign(new Error("Zealman 任务已结束，但没有返回视频文件"), { code: "MEDIA_TASK_FAILED" });
     }
-    if (task.status !== "running") {
-      task.status = "running";
+    if (result.success === false) {
+      const detail = context.tool.errorMessage(result) || "Zealman 暂时无法确认任务状态";
+      throw Object.assign(new Error(detail), { code: "MEDIA_TASK_STATUS_QUERY_FAILED", rawMessage: detail });
+    }
+    const nextStatus = zealmanTaskStatus(status, result.pending);
+    if (task.status !== nextStatus) {
+      task.status = nextStatus;
       await context.saveTaskData?.(task);
     }
     await wait(signal, 2000);
@@ -405,8 +447,45 @@ async function submitZealman(context: ProviderContext, request: VideoRequest, mo
   const workflowId = model.zealmanWorkflowId?.trim();
   const values = record(model.zealmanInputs);
   if (!workflowId || !values) throw new Error("Zealman 工作流缺少 workflow_id 或 input_values，请重新导入");
-  const inputValues = JSON.parse(JSON.stringify(values)) as Record<string, unknown>;
+  const inputValues = cloneWorkflowJson(values);
   const mapping = model.comfyMapping ?? {};
+  if (workflowId === u17WorkflowId) {
+    const durationInput = Object.hasOwn(inputValues, "value") ? "value" : "seconds";
+    const upscaleInput = Object.hasOwn(inputValues, "value_2") ? "value_2" : "value";
+    const megapixels = request.other?.megapixels;
+    const upscale = request.other?.upscale;
+    if (typeof request.duration !== "number" || !Number.isInteger(request.duration) || request.duration < 5 || request.duration > 15) {
+      throw new Error("U17 视频时长必须是 5～15 秒之间的整数");
+    }
+    if (typeof megapixels !== "number" || !Number.isFinite(megapixels) || megapixels <= 0) {
+      throw new Error("U17 megapixels 必须是有限正数");
+    }
+    if (typeof upscale !== "number" || !Number.isFinite(upscale) || upscale <= 0) {
+      throw new Error("U17 放大倍率必须是有限正数");
+    }
+    if (mapping.durationUnit !== "seconds" || mapping.duration?.nodeId !== "input_values"
+      || mapping.duration.input !== durationInput || typeof inputValues[durationInput] !== "number") {
+      throw new Error("U17 时长必须映射到工作流的秒数数字参数");
+    }
+    if (mapping.megapixels?.nodeId !== "input_values" || mapping.megapixels.input !== "megapixels"
+      || typeof inputValues.megapixels !== "number") {
+      throw new Error("U17 megapixels 必须映射到工作流的 megapixels 数字参数");
+    }
+    if (mapping.upscale?.nodeId !== "input_values" || mapping.upscale.input !== upscaleInput || typeof inputValues[upscaleInput] !== "number") {
+      throw new Error("U17 放大倍率必须映射到工作流对应的数字参数");
+    }
+    if (mapping.aspectRatio?.nodeId !== "input_values" || mapping.aspectRatio.input !== "aspect_ratio") {
+      throw new Error("U17 画幅比例必须映射到工作流的 aspect_ratio 参数");
+    }
+    if (request.other && Object.hasOwn(request.other, "aspectRatio")
+      && (typeof request.other.aspectRatio !== "string" || !request.other.aspectRatio.trim())) {
+      throw new Error("U17 aspect_ratio 必须是非空字符串");
+    }
+    if ((request.images?.length ?? 0) > 9 || (request.videos?.length ?? 0) > 1 || (request.audios?.length ?? 0) > 3) {
+      throw new Error("U17 参考素材最多支持 9 张图片、1 个视频、3 个音频");
+    }
+    for (const key of Object.keys(inputValues)) if (/^ref_(?:image|video|audio)_\d+$/.test(key)) inputValues[key] = "";
+  }
   const hasPromptInput = Object.hasOwn(inputValues, "prompt");
   if (!mapping.prompt) throw new Error("请配置有效的正向提示词映射");
   if (mapping.prompt.nodeId !== "input_values" || !Object.hasOwn(inputValues, mapping.prompt.input)
@@ -430,18 +509,20 @@ async function submitZealman(context: ProviderContext, request: VideoRequest, mo
   }
   if (mapping.prompt) setZealmanInput(inputValues, mapping.prompt, "提示词",
     workflowId === u17WorkflowId ? request.prompt : videoPrompt(request.prompt.trim()));
-  const ratio = typeof request.other?.aspectRatio === "string" ? request.other.aspectRatio : request.ratio;
-  const size = dimensions(request.resolution, ratio);
-  if (size) {
-    setZealmanInput(inputValues, mapping.width, "宽度", size.width);
-    setZealmanInput(inputValues, mapping.height, "高度", size.height);
+  if (workflowId !== u17WorkflowId) {
+    const ratio = typeof request.other?.aspectRatio === "string" ? request.other.aspectRatio : request.ratio;
+    const size = dimensions(request.resolution, ratio);
+    if (size) {
+      setZealmanInput(inputValues, mapping.width, "宽度", size.width);
+      setZealmanInput(inputValues, mapping.height, "高度", size.height);
+    }
+    if (request.resolution) {
+      const resolutionValue = mapping.resolution && typeof inputValues[mapping.resolution.input] === "number"
+        ? Number(/^(\d{3,4})p?$/i.exec(request.resolution)?.[1]) : request.resolution;
+      setZealmanInput(inputValues, mapping.resolution, "分辨率", resolutionValue);
+    }
   }
-  if (request.resolution) {
-    const resolutionValue = mapping.resolution && typeof inputValues[mapping.resolution.input] === "number"
-      ? Number(/^(\d{3,4})p?$/i.exec(request.resolution)?.[1]) : request.resolution;
-    setZealmanInput(inputValues, mapping.resolution, "分辨率", resolutionValue);
-  }
-  if (request.duration) {
+  if (request.duration !== undefined) {
     if (mapping.duration && !mapping.durationUnit) throw new Error("Zealman 时长映射缺少单位，请按实际工作流配置");
     if (mapping.durationUnit === "frames" && (!mapping.frameRate || !Number.isFinite(mapping.frameRate) || mapping.frameRate <= 0)) {
       throw new Error("Zealman 帧数映射缺少实际帧率");
@@ -449,20 +530,26 @@ async function submitZealman(context: ProviderContext, request: VideoRequest, mo
     const duration = mapping.durationUnit === "frames" ? Math.round(request.duration * mapping.frameRate!) : request.duration;
     setZealmanInput(inputValues, mapping.duration, "时长", duration);
   }
-  if (request.other?.aspectRatio !== undefined) setZealmanInput(inputValues, mapping.aspectRatio, "画幅比例", String(request.other.aspectRatio));
+  if (typeof request.other?.aspectRatio === "string") setZealmanInput(inputValues, mapping.aspectRatio, "画幅比例", request.other.aspectRatio);
   if (request.other?.megapixels !== undefined) setZealmanInput(inputValues, mapping.megapixels, "生成像素量", Number(request.other.megapixels));
+  if (workflowId === u17WorkflowId && Object.hasOwn(inputValues, "multiple")) {
+    setZealmanInput(inputValues, mapping.multiple ?? { nodeId: "input_values", input: "multiple" }, "尺寸对齐倍数", 32);
+  }
   if (request.other?.upscale !== undefined) setZealmanInput(inputValues, mapping.upscale, "放大倍率", Number(request.other.upscale));
-  if (mapping.frameRate) setZealmanInput(inputValues, mapping.fps, "帧率", mapping.frameRate);
+  if (workflowId === u17WorkflowId && Object.hasOwn(inputValues, "fps")) {
+    setZealmanInput(inputValues, mapping.fps ?? { nodeId: "input_values", input: "fps" }, "帧率", 24);
+  } else if (mapping.frameRate) setZealmanInput(inputValues, mapping.fps, "帧率", mapping.frameRate);
   await context.reportStage?.("submitting");
   const result = jsonObject(await requestJson(context, `${baseUrl}/api/workflow/generate`, "提交 Zealman 工作流", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ workflow_id: workflowId, input_values: inputValues }),
     signal: requestSignal(context, 120000),
   }), "Zealman 提交结果");
-  if (result.success === false) throw new Error(`Zealman 拒绝了工作流：${context.tool.errorMessage(result.error ?? result.message)}`);
+  if (result.success === false) throw new Error(`Zealman 拒绝了工作流：${context.tool.errorMessage(result) || "远程节点未返回具体错误信息"}`);
   if (typeof result.prompt_id !== "string" || !result.prompt_id) throw new Error("Zealman 未返回 prompt_id");
+  const initialStatus = zealmanTaskStatus(result.status, result.pending);
   const task: ComfyTaskData = { kind: "autodlComfyUi", protocol: "zealman", promptId: result.prompt_id,
-    model: request.model, baseUrlHash: String(context.tool.hash(baseUrl)), status: "queued" };
+    model: request.model, baseUrlHash: String(context.tool.hash(baseUrl)), status: initialStatus };
   await context.saveTaskData?.(task);
   return pollZealmanTask(context, task);
 }
@@ -566,6 +653,7 @@ async function submit(context: ProviderContext, request: VideoRequest, model: Co
   }
   if (mapping.fps && mapping.frameRate) setMappedInput(workflow, mapping.fps, "帧率", mapping.frameRate);
 
+  await context.reportStage?.("submitting");
   const response = await requestJson(context, `${baseUrl}/prompt`, "提交 ComfyUI 工作流", {
     method: "POST",
     headers: new Headers([...headers(context), ["Content-Type", "application/json"]]),
