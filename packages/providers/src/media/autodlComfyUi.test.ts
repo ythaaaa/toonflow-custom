@@ -189,19 +189,20 @@ describe("AutoDL Zealman multi-image mapping", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("distinguishes queued, unknown processing, running, download and completed media", async () => {
+  it("prioritizes Zealman processing and running status over pending while preserving queued fallback", async () => {
     const { context, savedTasks, stages } = createZealmanContext({ statuses: [
+      { pending: true },
       { status: "processing", pending: true },
       { status: "processing" },
-      { status: "processing", pending: false },
       { status: "running" },
+      { status: "unrecognized", pending: true },
       { status: "completed", results: [{ type: "video", url: "/output/mock.mp4" }] },
     ] });
     const result = await provider.generateVideo!.call(context as never, {
       model: "zealman", mode: "text", prompt: "status mock",
     });
 
-    expect(savedTasks.map(task => task.status)).toEqual(["unknown", "queued", "unknown", "running"]);
+    expect(savedTasks.map(task => task.status)).toEqual(["unknown", "queued", "running", "unknown"]);
     expect(stages).toEqual(["submitting", "waiting", "downloading"]);
     expect(result[0]?.mediaType).toBe("video");
   }, 15000);

@@ -383,11 +383,10 @@ function setZealmanInput(values: Record<string, unknown>, mapping: ComfyInputMap
 }
 
 function zealmanTaskStatus(statusValue: unknown, pending: unknown): "queued" | "running" | "unknown" {
-  const status = String(statusValue ?? "").toLowerCase();
-  if (["queued", "pending", "waiting"].includes(status)) return "queued";
-  if (["running", "executing"].includes(status)) return "running";
-  if (status === "processing" && typeof pending === "boolean") return pending ? "queued" : "running";
-  return pending === true ? "queued" : "unknown";
+  const status = String(statusValue ?? "").trim().toLowerCase();
+  if (["queued", "pending", "waiting", "queue", "wait"].includes(status)) return "queued";
+  if (["processing", "running", "executing", "in_progress", "started", "generating"].includes(status)) return "running";
+  return !status && pending === true ? "queued" : "unknown";
 }
 
 async function pollZealmanTask(context: ProviderContext, task: ComfyTaskData) {
