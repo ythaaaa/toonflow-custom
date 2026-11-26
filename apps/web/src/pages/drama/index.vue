@@ -526,6 +526,8 @@ function buildSharedSeed(documentId: string) {
       "# " + value.name,
       value.genre ? "\n**题材：** " + value.genre : "",
       value.style ? "\n**视觉风格：** " + value.style : "",
+      "\n**目标集数：** " + value.targetEpisodes,
+      "\n**目标单集时长：** " + value.targetDuration + " 秒",
       value.storyOutline ? "\n## 故事大纲\n\n" + value.storyOutline : "",
     ].filter(Boolean).join("\n");
   }
@@ -541,25 +543,51 @@ function buildCharacterSettings(characters: DramaCharacter[]) {
   return ["# 人物设定", ...items.map(item => [
     "## " + (item.name || "未命名人物"),
     item.identity ? "**身份：** " + item.identity : "",
+    item.age ? "**年龄：** " + item.age : "",
     item.description ? "\n" + item.description : "",
     item.appearance ? "\n**外观：** " + item.appearance : "",
+    item.hairstyle ? "\n**发型：** " + item.hairstyle : "",
     item.outfit ? "\n**服装：** " + item.outfit : "",
     item.visualFeatures?.length ? "\n**视觉特征：** " + item.visualFeatures.join("、") : "",
+    item.prompt ? "\n**生图提示词：**\n\n" + item.prompt : "",
+    ...(item.looks ?? []).filter(look => !look.archived).map(look => [
+      "### 造型 · " + look.name,
+      look.age ? "**年龄：** " + look.age : "",
+      look.appearance ? "\n**外观：** " + look.appearance : "",
+      look.hairstyle ? "\n**发型：** " + look.hairstyle : "",
+      "\n**服装：** " + look.outfit,
+      look.visualFeatures?.length ? "\n**视觉特征：** " + look.visualFeatures.join("、") : "",
+      look.prompt ? "\n**生图提示词：**\n\n" + look.prompt : "",
+      look.referenceAssetIds?.length ? "\n**参考素材 ID：** " + look.referenceAssetIds.join("、") : "",
+    ].filter(Boolean).join("\n")),
   ].filter(Boolean).join("\n"))].join("\n\n");
 }
 
 function buildSceneSettings(value: DramaProject) {
   const assets = value.assets.filter(item => item.kind === "scene");
   const scenes = value.episodes.flatMap(episode => episode.scenes.filter(item => !item.archived).map(scene => ({ episode, scene })));
-  const assetText = assets.map(item => "## " + (item.name || "未命名场景") + "\n\n" + (item.description || ""));
-  const sceneText = scenes.map(({ episode, scene }) => "## EP" + String(episode.number).padStart(3, "0") + " · " + (scene.heading || "未命名场景") + "\n\n" + (scene.environment || scene.description || ""));
+  const assetText = assets.map(item => [
+    "## " + (item.name || "未命名场景"), item.description, item.referencePath ? "**参考路径：** " + item.referencePath : "",
+    item.referenceAssetIds?.length ? "**参考素材 ID：** " + item.referenceAssetIds.join("、") : "",
+  ].filter(Boolean).join("\n\n"));
+  const sceneText = scenes.map(({ episode, scene }) => [
+    "## EP" + String(episode.number).padStart(3, "0") + " · " + (scene.heading || "未命名场景"),
+    [scene.interiorExterior, scene.dayPart, scene.time].filter(Boolean).join(" · "), scene.location,
+    scene.environment || scene.description, scene.color ? "**色彩：** " + scene.color : "", scene.layout ? "**布局：** " + scene.layout : "",
+    scene.prompt ? "**生图提示词：**\n\n" + scene.prompt : "", scene.referenceAssetId ? "**参考素材 ID：** " + scene.referenceAssetId : "",
+  ].filter(Boolean).join("\n\n"));
   const items = [...assetText, ...sceneText];
   return items.length ? ["# 场景设定", ...items].join("\n\n") : "";
 }
 
 function buildAssetSettings(assets: DramaAsset[], title: string) {
   if (!assets.length) return "";
-  return ["# " + title, ...assets.map(item => "## " + (item.name || "未命名道具") + "\n\n" + (item.description || ""))].join("\n\n");
+  return ["# " + title, ...assets.map(item => [
+    "## " + (item.name || "未命名道具"), item.description,
+    item.characterId ? "**人物 ID：** " + item.characterId : "", item.episodeId ? "**分集 ID：** " + item.episodeId : "",
+    item.sceneId ? "**场景 ID：** " + item.sceneId : "", item.shotId ? "**镜头 ID：** " + item.shotId : "",
+    item.referencePath ? "**参考路径：** " + item.referencePath : "", item.referenceAssetIds?.length ? "**关联素材 ID：** " + item.referenceAssetIds.join("、") : "",
+  ].filter(Boolean).join("\n\n"))].join("\n\n");
 }
 
 function buildEpisodeOutlines(seasonId: string) {
@@ -582,21 +610,33 @@ function buildStoryboard(episode: DramaEpisode) {
       "## 场次 " + String(scene.number).padStart(3, "0") + " · " + (scene.heading || "未命名场景"),
       scene.location ? "\n**地点：** " + scene.location : "",
       scene.environment || scene.description ? "\n" + (scene.environment || scene.description) : "",
-      ...sceneShots.map(formatShot),
+      scene.color ? "\n**色彩：** " + scene.color : "",
+      scene.layout ? "\n**布局：** " + scene.layout : "",
+      scene.prompt ? "\n**场景提示词：**\n\n" + scene.prompt : "",
+      ...sceneShots.map(shot => formatShot(shot, project.value)),
     ].filter(Boolean).join("\n\n");
   });
   const unassigned = shots.filter(shot => !scenes.some(scene => scene.id === shot.sceneId));
-  return ["# " + episode.title + " · 分镜脚本", ...sections, ...unassigned.map(formatShot)].join("\n\n");
+  return ["# " + episode.title + " · 分镜脚本", ...sections, ...unassigned.map(shot => formatShot(shot, project.value))].join("\n\n");
 }
 
-function formatShot(shot: DramaShot) {
+function formatShot(shot: DramaShot, project?: DramaProject) {
+  const characters = (shot.characterIds ?? []).map(id => project?.characters.find(item => item.id === id)?.name).filter((name): name is string => !!name);
   return [
     "### " + shot.number,
+    shot.startTime || shot.endTime ? "**时间码：** " + [shot.startTime, shot.endTime].filter(Boolean).join("–") : "",
+    characters.length ? "**人物：** " + characters.join("、") : "",
     shot.description ? "**画面：** " + shot.description : "",
     shot.action ? "**动作：** " + shot.action : "",
+    shot.expression ? "**表情：** " + shot.expression : "",
+    [shot.size, shot.angle, shot.composition].filter(Boolean).length ? "**景别/机位/构图：** " + [shot.size, shot.angle, shot.composition].filter(Boolean).join(" / ") : "",
+    shot.movement ? "**运镜：** " + shot.movement : "",
     shot.dialogue ? "**台词：** " + shot.dialogue : "",
     shot.sound ? "**声音：** " + shot.sound : "",
     "**时长：** " + shot.duration + " 秒",
+    shot.imagePrompt ? "**图片提示词：**\n\n" + shot.imagePrompt : "",
+    shot.videoPrompt ? "**视频提示词：**\n\n" + shot.videoPrompt : "",
+    shot.referenceAssetIds?.length ? "**参考素材 ID：** " + shot.referenceAssetIds.join("、") : "",
   ].filter(Boolean).join("\n\n");
 }
 

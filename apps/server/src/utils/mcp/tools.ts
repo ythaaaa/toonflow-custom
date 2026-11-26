@@ -21,10 +21,13 @@ import { isWithin, lockWorkspaceFiles, protectWorkspaceRoot, renameWorkspaceFile
 import { getRuntimePlatform } from "@/lib/platform";
 import { thinkingLevels } from "@/lib/modelReasoning";
 import {
-  createEpisode as createDramaEpisode, createScene as createDramaScene, createShot as createDramaShot,
-  listDramaProjects as listDramaProjectFiles, readEpisodeScript, saveEpisodeDraft, saveEpisodeScriptVersion, updateScriptReview,
+  createCharacter as createDramaCharacter, createCharacterLook as createDramaCharacterLook,
+  createDramaAsset, createDramaProject, createEpisode as createDramaEpisode, createScene as createDramaScene,
+  createSeason as createDramaSeason, createShot as createDramaShot, listDramaProjects as listDramaProjectFiles,
+  readEpisodeDraftSnapshot, saveDramaProject, saveEpisodeDraft, saveEpisodeScriptVersion, updateCharacter as updateDramaCharacter,
+  updateCharacterLook as updateDramaCharacterLook, updateDramaProject, updateDramaAsset, updateScriptReview,
   updateEpisode as updateDramaEpisode, updateScene as updateDramaScene, updateShot as updateDramaShot,
-  type DramaEpisode, type DramaProject, type DramaScene, type DramaShot, type DramaWorkspaceFiles,
+  type DramaAsset, type DramaEpisode, type DramaProject, type DramaWorkspaceFiles,
 } from "@toonflow/drama-workspace";
 
 const targetSchema = z.strictObject({ connectionId: z.uuid().optional(), directory: z.string().min(1).max(4096).optional(), canvasId: z.string().min(1).max(256).optional() });
@@ -174,6 +177,10 @@ async function resolveDramaWorkspace(target: z.infer<typeof targetSchema>) {
   return resolveDirectory(target.directory);
 }
 
+async function validateDramaReferencePath(directory: string, path?: string) {
+  if (path) await resolveWorkspacePath(directory, path, true);
+}
+
 async function loadDramaProject(directory: string, projectId: string) {
   const files = dramaFiles(directory);
   const entry = (await listDramaProjectFiles(files)).find(item => item.project.id === projectId);
@@ -206,19 +213,40 @@ const dramaSceneFields = {
   heading: z.string().max(1000).optional(), time: z.string().max(100).optional(), location: z.string().max(1000).optional(),
   interiorExterior: z.enum(["内景", "外景"]).optional(), dayPart: z.enum(["白天", "夜晚", "黄昏", "清晨"]).optional(),
   characters: z.array(z.string().max(200)).max(100).optional(), charactersText: z.string().max(4000).optional(), description: z.string().max(20000).optional(),
+  environment: z.string().max(20000).optional(), color: z.string().max(4000).optional(), layout: z.string().max(8000).optional(),
+  prompt: z.string().max(20000).optional(), referenceAssetId: z.string().max(256).optional(),
   sourceScriptVersionId: z.string().max(256).optional(), archived: z.boolean().optional(), order: z.number().int().positive().optional(),
 };
 const dramaSceneCreateFields = { ...dramaSceneFields };
 delete (dramaSceneCreateFields as Partial<typeof dramaSceneFields>).archived;
 delete (dramaSceneCreateFields as Partial<typeof dramaSceneFields>).order;
+const dramaCharacterFields = {
+  name: z.string().trim().min(1).max(500).optional(), description: z.string().max(20000).optional(), appearance: z.string().max(20000).optional(),
+  age: z.string().max(100).optional(), identity: z.string().max(4000).optional(), hairstyle: z.string().max(4000).optional(), outfit: z.string().max(8000).optional(),
+  visualFeatures: z.array(z.string().max(1000)).max(100).optional(), prompt: z.string().max(20000).optional(), referencePath: z.string().max(4096).optional(),
+};
+const dramaCharacterLookFields = {
+  name: z.string().trim().min(1).max(500).optional(), age: z.string().max(100).optional(), appearance: z.string().max(20000).optional(),
+  hairstyle: z.string().max(4000).optional(), outfit: z.string().max(8000).optional(), visualFeatures: z.array(z.string().max(1000)).max(100).optional(),
+  prompt: z.string().max(20000).optional(), referencePath: z.string().max(4096).optional(), referenceAssetIds: z.array(z.string().max(256)).max(100).optional(),
+};
+const dramaAssetFields = {
+  name: z.string().trim().min(1).max(500).optional(), description: z.string().max(20000).optional(), referencePath: z.string().max(4096).optional(),
+  referenceAssetIds: z.array(z.string().max(256)).max(100).optional(), episodeId: z.string().max(256).optional(), sceneId: z.string().max(256).optional(),
+  shotId: z.string().max(256).optional(), characterId: z.string().max(256).optional(),
+};
 const dramaShotFields = {
-  sceneId: z.string().min(1).max(256).optional(), description: z.string().max(20000).optional(), action: z.string().max(10000).optional(), expression: z.string().max(4000).optional(),
+  sceneId: z.string().min(1).max(256).optional(), characterIds: z.array(z.string().max(256)).max(100).optional(),
+  number: z.string().regex(/^SH\d{3,}$/i).max(32).optional(),
+  startTime: z.string().max(100).optional(), endTime: z.string().max(100).optional(),
+  description: z.string().max(20000).optional(), action: z.string().max(10000).optional(), expression: z.string().max(4000).optional(),
   size: z.string().max(200).optional(), angle: z.string().max(200).optional(), composition: z.string().max(4000).optional(), movement: z.string().max(4000).optional(),
-  dialogue: z.string().max(10000).optional(), sound: z.string().max(4000).optional(), duration: z.number().min(0).max(3600).optional(),
+  dialogue: z.string().max(10000).optional(), sound: z.string().max(4000).optional(), duration: z.number().positive().max(3600).optional(),
   imagePrompt: z.string().max(20000).optional(), videoPrompt: z.string().max(20000).optional(), referencePath: z.string().max(4096).optional(),
   firstFrameAssetId: z.string().max(256).optional(), lastFrameAssetId: z.string().max(256).optional(), referenceAssetIds: z.array(z.string().max(256)).max(100).optional(), aspectRatio: z.string().regex(/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/).max(32).optional(),
   productionStatus: z.enum(["待制作", "制作中", "已完成"]).optional(), reviewStatus: z.enum(["草稿", "待审核", "已确认", "已归档"]).optional(), status: z.enum(["草稿", "待审核", "已确认", "已归档"]).optional(), order: z.number().int().positive().optional(),
 };
+const dramaShotCreateFields = dramaShotFields;
 
 function getDramaTools(): McpTool[] {
   const tools: McpTool[] = [];
@@ -227,6 +255,45 @@ function getDramaTools(): McpTool[] {
   };
   add("listDramaProjects", "列出 target.directory 工作区中的短剧项目摘要。必须明确指定工作区。", z.strictObject({}), async (_args, directory) => (await listDramaProjectFiles(dramaFiles(directory))).map(({ project }) => ({ id: project.id, name: project.name, genre: project.genre, style: project.style, seasons: project.seasons.length, episodes: project.episodes.length, updatedAt: project.updatedAt })));
   add("getDramaProject", "读取指定工作区内 projectId 对应的短剧项目结构。", dramaProjectSchema, async ({ projectId }, directory) => (await loadDramaProject(directory, projectId)).project);
+  add("createDramaProject", "在当前工作区创建短剧项目；同名且字段相同的重复请求返回原项目，字段不同则拒绝覆盖。", z.strictObject({
+    projectId: z.uuid().optional(), name: z.string().trim().min(1).max(120), genre: z.string().max(200).default(""), style: z.string().max(2000).default(""),
+    storyOutline: z.string().max(200000).default(""), targetEpisodes: z.number().int().positive().max(500).default(12), targetDuration: z.number().int().positive().max(7200).default(180),
+  }), async ({ projectId, ...input }, directory) => withDramaWriteLock(directory, async () => {
+    const files = dramaFiles(directory);
+    const existing = (await listDramaProjectFiles(files)).find(item => item.project.name.trim().toLocaleLowerCase() === input.name.toLocaleLowerCase());
+    if (existing) {
+      const project = existing.project;
+      const matches = (!projectId || project.id === projectId) && ["genre", "style", "storyOutline", "targetEpisodes", "targetDuration"]
+        .every(key => project[key as keyof DramaProject] === input[key as keyof typeof input]);
+      if (!matches) throw new Error(`当前工作区已有同名项目“${input.name}”，内容不同；请使用 updateDramaProject 修改`);
+      return { project, deduplicated: true, verified: true };
+    }
+    const project = await createDramaProject(files, { ...input, ...(projectId ? { id: projectId } : {}) });
+    const saved = (await loadDramaProject(directory, project.id)).project;
+    if (JSON.stringify(saved) !== JSON.stringify(project)) throw new Error("项目创建后回读校验失败");
+    return { project: saved, deduplicated: false, verified: true };
+  }));
+  add("updateDramaProject", "更新项目基础信息；至少提供一个可更新字段。同名冲突会拒绝写入，完整快照使用修订号保护。", dramaProjectSchema.extend({
+    name: z.string().trim().min(1).max(120).optional(), genre: z.string().max(200).optional(), style: z.string().max(2000).optional(),
+    storyOutline: z.string().max(200000).optional(), targetEpisodes: z.number().int().positive().max(500).optional(), targetDuration: z.number().int().positive().max(7200).optional(),
+  }), async ({ projectId, ...patch }, directory) => withDramaWriteLock(directory, async () => {
+    if (!Object.keys(patch).length) throw new Error("至少提供一个项目字段");
+    const data = await loadDramaProject(directory, projectId);
+    if (Object.entries(patch).every(([key, value]) => data.project[key as keyof DramaProject] === value)) return { project: data.project, deduplicated: true, verified: true };
+    const project = await updateDramaProject(data.files, data.project, patch, data.manifestPath);
+    return { project: (await loadDramaProject(directory, projectId)).project, deduplicated: false, verified: true };
+  }));
+  add("createSeason", "在项目中创建季度；同名、相同预建集数的重复请求返回原季度，不创建重复分集。", dramaProjectSchema.extend({
+    seasonId: z.uuid().optional(), name: z.string().trim().min(1).max(120), episodeCount: z.number().int().min(0).max(500).default(0),
+  }), async ({ projectId, seasonId, name, episodeCount }, directory) => withDramaWriteLock(directory, async () => {
+    const data = await loadDramaProject(directory, projectId);
+    const previous = data.project.seasons.find(item => item.id === seasonId || item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+    const season = createDramaSeason(data.project, name, episodeCount, seasonId);
+    if (!previous) await saveDramaProject(data.files, data.project, data.manifestPath);
+    const saved = (await loadDramaProject(directory, projectId)).project.seasons.find(item => item.id === season.id);
+    if (!saved || JSON.stringify(saved) !== JSON.stringify(season)) throw new Error("季度写入后回读校验失败");
+    return { season: saved, deduplicated: !!previous, verified: true };
+  }));
   add("listEpisodes", "列出指定项目的剧集，可按 seasonId 筛选。", dramaProjectSchema.extend({ seasonId: z.string().max(256).optional() }), async ({ projectId, seasonId }, directory) => {
     const { project } = await loadDramaProject(directory, projectId);
     return project.episodes.filter(item => !seasonId || item.seasonId === seasonId).map(({ id, seasonId: sid, number, title, outline, scriptVersion, formalVersionId, status }) => ({ id, seasonId: sid, number, title, outline, scriptVersion, formalVersionId, status }));
@@ -235,24 +302,164 @@ function getDramaTools(): McpTool[] {
   add("getEpisodeScripts", "读取工作稿和全部历史正式/草稿版本内容；工作稿与正式版本分开返回。", dramaEpisodeSchema, async ({ projectId, episodeId }, directory) => {
     const { files, project, manifestPath } = await loadDramaProject(directory, projectId);
     const episode = requireEpisode(project, episodeId);
-    const draft = await readEpisodeScript(files, project, episodeId, manifestPath);
+    const draft = await readEpisodeDraftSnapshot(files, project, episodeId, manifestPath);
     const versions = await Promise.all((project.scriptVersions[episodeId] ?? []).map(async version => ({ ...version, formal: episode.formalVersionId === version.id, content: await files.readText(version.path) })));
-    return { episodeId, formalVersionId: episode.formalVersionId ?? null, draftPath: episode.draftPath ?? null, draft, versions };
+    return { episodeId, formalVersionId: episode.formalVersionId ?? null, draftPath: draft.path, draft: draft.content, draftRevision: draft.revision, versions };
   });
   add("getEpisodeScenes", "读取指定剧集的场景列表。", dramaEpisodeSchema, async ({ projectId, episodeId }, directory) => requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId).scenes);
   add("getEpisodeShots", "读取指定剧集的镜头列表，包含提示词、时长、画幅及素材关联字段。", dramaEpisodeSchema, async ({ projectId, episodeId }, directory) => requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId).shots);
-  add("getDramaAssets", "读取指定项目的素材与人物参考目录。", dramaProjectSchema, async ({ projectId }, directory) => { const { project } = await loadDramaProject(directory, projectId); return { assets: project.assets, characters: project.characters }; });
-  add("saveEpisodeDraft", "保存指定剧集的工作稿并执行文件与项目索引回读校验；不修改正式版本。", dramaEpisodeSchema.extend({ content: z.string().max(2_000_000) }), async ({ projectId, episodeId, content }, directory) => withDramaWriteLock(directory, async () => { const { files, project, manifestPath } = await loadDramaProject(directory, projectId); const path = await saveEpisodeDraft(files, project, episodeId, content, manifestPath); return { episodeId, draftPath: path, verified: (await files.readText(path)) === content, formalVersionId: project.episodes.find(item => item.id === episodeId)?.formalVersionId ?? null }; }));
-  add("createScriptVersion", "创建新的历史剧本版本，不覆盖已有版本；新版本初始状态为草稿，设为正式版须走 Toonflow 审核确认流程。", dramaEpisodeSchema.extend({ content: z.string().max(2_000_000) }), async ({ projectId, episodeId, content }, directory) => withDramaWriteLock(directory, async () => { const { files, project, manifestPath } = await loadDramaProject(directory, projectId); const version = await saveEpisodeScriptVersion(files, project, episodeId, content, manifestPath); return { episodeId, version, formalVersionId: project.episodes.find(item => item.id === episodeId)?.formalVersionId ?? null, verified: (await files.readText(version.path)) === content }; }));
+  add("getDramaAssets", "读取当前项目的素材与人物；可按资产 ID、类型和归属过滤。", dramaProjectSchema.extend({
+    assetId: z.string().max(256).optional(), kind: z.enum(["scene", "prop", "image"]).optional(), characterId: z.string().max(256).optional(),
+    episodeId: z.string().max(256).optional(), sceneId: z.string().max(256).optional(), shotId: z.string().max(256).optional(),
+  }), async ({ projectId, assetId, ...filter }, directory) => {
+    const { project } = await loadDramaProject(directory, projectId);
+    return {
+      assets: project.assets.filter(item => (!assetId || item.id === assetId) && Object.entries(filter).every(([key, value]) => value === undefined || item[key as keyof DramaAsset] === value)),
+      characters: filter.characterId ? project.characters.filter(item => item.id === filter.characterId) : project.characters,
+    };
+  });
+  add("saveEpisodeDraft", "保存工作稿并执行文件与项目索引回读校验；已存在工作稿必须携带 getEpisodeScripts 返回的 draftRevision，重复提交相同正文会安全返回，不修改正式版本。", dramaEpisodeSchema.extend({ content: z.string().max(2_000_000), expectedRevision: z.string().regex(/^[a-f0-9]{64}$/i).optional() }), async ({ projectId, episodeId, content, expectedRevision }, directory) => withDramaWriteLock(directory, async () => {
+    const data = await loadDramaProject(directory, projectId);
+    const current = await readEpisodeDraftSnapshot(data.files, data.project, episodeId, data.manifestPath);
+    if (current.content === content && current.revision) return { episodeId, draftPath: current.path, draftRevision: current.revision, deduplicated: true, verified: true, formalVersionId: data.project.episodes.find(item => item.id === episodeId)?.formalVersionId ?? null };
+    if (current.revision && !expectedRevision) throw new Error(`工作稿已存在；请先调用 getEpisodeScripts 并携带 draftRevision ${current.revision}，避免覆盖用户修改`);
+    if (current.revision && current.revision !== expectedRevision) throw new Error("工作稿已被修改；请重新调用 getEpisodeScripts 后再保存");
+    if (!current.revision && expectedRevision) throw new Error("工作稿状态已变化；请重新调用 getEpisodeScripts 后再保存");
+    const snapshot = current.revision ? { revision: expectedRevision!, encoding: "utf-8" as const } : null;
+    await saveEpisodeDraft(data.files, data.project, episodeId, content, data.manifestPath, snapshot);
+    const saved = await readEpisodeDraftSnapshot(data.files, data.project, episodeId, data.manifestPath);
+    if (saved.content !== content) throw new Error("工作稿写入后回读校验失败");
+    return { episodeId, draftPath: saved.path, draftRevision: saved.revision, deduplicated: false, verified: true, formalVersionId: data.project.episodes.find(item => item.id === episodeId)?.formalVersionId ?? null };
+  }));
+  add("createScriptVersion", "创建历史剧本版本，初始状态始终为草稿；同一剧集中重复提交相同正文返回既有版本，不改变正式版。", dramaEpisodeSchema.extend({ content: z.string().max(2_000_000) }), async ({ projectId, episodeId, content }, directory) => withDramaWriteLock(directory, async () => {
+    const data = await loadDramaProject(directory, projectId);
+    const versions = data.project.scriptVersions[episodeId] ?? [];
+    for (const version of versions) if (await data.files.readText(version.path) === content) {
+      return { episodeId, version, deduplicated: true, formalVersionId: data.project.episodes.find(item => item.id === episodeId)?.formalVersionId ?? null, verified: true };
+    }
+    const version = await saveEpisodeScriptVersion(data.files, data.project, episodeId, content, data.manifestPath);
+    if (version.status !== "草稿") throw new Error("候选剧本版本未保持草稿状态");
+    return { episodeId, version, deduplicated: false, formalVersionId: data.project.episodes.find(item => item.id === episodeId)?.formalVersionId ?? null, verified: (await data.files.readText(version.path)) === content };
+  }));
   add("confirmScriptVersion", "将指定剧集中的历史版本设为正式版。该操作独立于保存工作稿和创建版本；旧正式版本会按现有规则归档。", dramaEpisodeSchema.extend({ versionId: z.string().min(1).max(256), confirmed: z.literal(true) }), async ({ projectId, episodeId, versionId }, directory) => withDramaWriteLock(directory, async () => { const { files, project, manifestPath } = await loadDramaProject(directory, projectId); await updateScriptReview(files, project, episodeId, versionId, "已确认", manifestPath); const saved = (await loadDramaProject(directory, projectId)).project; const formalVersionId = saved.episodes.find(item => item.id === episodeId)?.formalVersionId; return { episodeId, formalVersionId, verified: formalVersionId === versionId }; }));
-  add("createEpisode", "在指定季度创建剧集，自动分配稳定 ID 与季度内集数。", dramaProjectSchema.extend({ seasonId: z.string().min(1).max(256), title: z.string().max(500).optional(), outline: z.string().max(20000).optional() }), async ({ projectId, seasonId, title, outline }, directory) => withDramaWriteLock(directory, async () => { const data = await loadDramaProject(directory, projectId); return { episode: await createDramaEpisode(data.files, data.project, seasonId, { title, outline }, data.manifestPath), verified: true }; }));
-  add("updateEpisode", "更新剧集标题、大纲或非正式状态；正式状态只能通过 confirmScriptVersion 设置。", dramaEpisodeSchema.extend({ title: z.string().max(500).optional(), outline: z.string().max(20000).optional(), status: z.enum(["草稿", "待审核", "已归档"]).optional() }), async ({ projectId, episodeId, title, outline, status }, directory) => withDramaWriteLock(directory, async () => { const data = await loadDramaProject(directory, projectId); return { episode: await updateDramaEpisode(data.files, data.project, episodeId, { title, outline, status }, data.manifestPath), verified: true }; }));
-  add("createScene", "在指定剧集创建场景，系统分配稳定 ID 和顺序号。", dramaEpisodeSchema.extend(dramaSceneCreateFields), async ({ projectId, episodeId, ...input }, directory) => withDramaWriteLock(directory, async () => { const data = await loadDramaProject(directory, projectId); return { scene: await createDramaScene(data.files, data.project, episodeId, input, data.manifestPath), verified: true }; }));
-  add("updateScene", "按稳定 sceneId 更新指定剧集中的场景，不允许跨剧集写入。", dramaEpisodeSchema.extend({ sceneId: z.string().min(1).max(256), ...dramaSceneFields }), async ({ projectId, episodeId, sceneId, ...patch }, directory) => withDramaWriteLock(directory, async () => { const data = await loadDramaProject(directory, projectId); return { scene: await updateDramaScene(data.files, data.project, episodeId, sceneId, patch, data.manifestPath), verified: true }; }));
-  add("createShot", "在指定剧集和场景创建镜头，系统分配稳定 ID 与镜号。", dramaEpisodeSchema.extend({ ...dramaShotFields, sceneId: z.string().min(1).max(256) }), async ({ projectId, episodeId, ...input }, directory) => withDramaWriteLock(directory, async () => { const data = await loadDramaProject(directory, projectId); return { shot: await createDramaShot(data.files, data.project, episodeId, input, data.manifestPath), verified: true }; }));
-  add("updateShot", "按稳定 shotId 更新指定剧集中的镜头；关联场景必须属于同一剧集。", dramaEpisodeSchema.extend({ shotId: z.string().min(1).max(256), ...dramaShotFields }), async ({ projectId, episodeId, shotId, ...patch }, directory) => withDramaWriteLock(directory, async () => { const data = await loadDramaProject(directory, projectId); return { shot: await updateDramaShot(data.files, data.project, episodeId, shotId, patch, data.manifestPath), verified: true }; }));
-  const batchSchema = z.strictObject({ operations: z.array(z.strictObject({ tool: z.enum(["saveEpisodeDraft", "createScriptVersion", "confirmScriptVersion", "createEpisode", "updateEpisode", "createScene", "updateScene", "createShot", "updateShot"]), args: z.record(z.string(), z.unknown()) })).min(1).max(25) });
-  tools.push(wrapTool("applyDramaBatch", "在同一工作区、同一项目内顺序执行最多25项短剧写操作；每项单独回读核验，失败时停止后续操作并返回已完成、失败与未执行项。此操作不提供跨多个文件的事务回滚。", z.toJSONSchema(batchSchema), async (raw, target, signal) => {
+  add("createEpisode", "在指定季度创建草稿分集；使用 episodeId 或显式标题作为稳定键，重复请求会返回原分集。", dramaProjectSchema.extend({ seasonId: z.string().min(1).max(256), episodeId: z.uuid().optional(), title: z.string().trim().min(1).max(500).optional(), outline: z.string().max(20000).optional() }), async ({ projectId, seasonId, episodeId, title, outline }, directory) => withDramaWriteLock(directory, async () => {
+    if (!episodeId && !title) throw new Error("创建分集必须提供 episodeId 或明确标题，以便安全重试");
+    const data = await loadDramaProject(directory, projectId);
+    const before = data.project.episodes.map(item => item.id);
+    const episode = await createDramaEpisode(data.files, data.project, seasonId, { id: episodeId, title, outline }, data.manifestPath);
+    return { episode, deduplicated: before.includes(episode.id), verified: (await loadDramaProject(directory, projectId)).project.episodes.some(item => item.id === episode.id) };
+  }));
+  add("updateEpisode", "更新剧集标题、大纲、人物关联或非正式状态；不会将剧本版本设为正式版。", dramaEpisodeSchema.extend({ title: z.string().trim().min(1).max(500).optional(), outline: z.string().max(20000).optional(), characterIds: z.array(z.string().max(256)).max(100).optional(), status: z.enum(["草稿", "待审核", "已归档"]).optional() }), async ({ projectId, episodeId, title, outline, characterIds, status }, directory) => withDramaWriteLock(directory, async () => {
+    const data = await loadDramaProject(directory, projectId);
+    const episode = await updateDramaEpisode(data.files, data.project, episodeId, { title, outline, characterIds, status }, data.manifestPath);
+    const saved = requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId);
+    if (JSON.stringify(saved) !== JSON.stringify(episode)) throw new Error("分集写入后回读校验失败");
+    return { episode: saved, verified: true };
+  }));
+  add("createCharacter", "在项目中创建人物；按 characterId 或同名完全相同的设定幂等返回，冲突时不会覆盖已有角色。", dramaProjectSchema.extend({ characterId: z.uuid().optional(), ...dramaCharacterFields, name: z.string().trim().min(1).max(500) }), async ({ projectId, characterId, ...input }, directory) => withDramaWriteLock(directory, async () => {
+    await validateDramaReferencePath(directory, input.referencePath);
+    const data = await loadDramaProject(directory, projectId);
+    const existingIds = new Set(data.project.characters.map(item => item.id));
+    const character = await createDramaCharacter(data.files, data.project, { ...input, ...(characterId ? { id: characterId } : {}) }, data.manifestPath);
+    const saved = (await loadDramaProject(directory, projectId)).project.characters.find(item => item.id === character.id);
+    if (!saved) throw new Error("人物写入后回读校验失败");
+    return { character: saved, deduplicated: existingIds.has(character.id), verified: true };
+  }));
+  add("getDramaCharacter", "按稳定 characterId 读取当前项目中的人物设定及服装造型。", dramaProjectSchema.extend({ characterId: z.string().min(1).max(256) }), async ({ projectId, characterId }, directory) => {
+    const character = (await loadDramaProject(directory, projectId)).project.characters.find(item => item.id === characterId);
+    if (!character) throw new Error("目标人物不存在或不属于指定项目");
+    return character;
+  });
+  add("updateCharacter", "更新当前项目中的人物外观、年龄、身份、发型、服装和生图提示词；关联路径和参考素材必须属于当前工作区/项目。", dramaProjectSchema.extend({ characterId: z.string().min(1).max(256), ...dramaCharacterFields }), async ({ projectId, characterId, ...patch }, directory) => withDramaWriteLock(directory, async () => {
+    if (!Object.keys(patch).length) throw new Error("至少提供一个人物字段");
+    await validateDramaReferencePath(directory, patch.referencePath);
+    const data = await loadDramaProject(directory, projectId);
+    const character = await updateDramaCharacter(data.files, data.project, characterId, patch, data.manifestPath);
+    const saved = (await loadDramaProject(directory, projectId)).project.characters.find(item => item.id === characterId);
+    if (!saved || saved.version !== character.version) throw new Error("人物写入后回读校验失败");
+    return { character: saved, verified: true };
+  }));
+  add("createCharacterLook", "为人物创建服装/造型版本；lookId 可用于安全重试，名称在人物内唯一。", dramaProjectSchema.extend({
+    characterId: z.string().min(1).max(256), lookId: z.uuid().optional(), ...dramaCharacterLookFields,
+    name: z.string().trim().min(1).max(500), outfit: z.string().trim().min(1).max(8000),
+  }), async ({ projectId, characterId, lookId, ...input }, directory) => withDramaWriteLock(directory, async () => {
+    await validateDramaReferencePath(directory, input.referencePath);
+    const data = await loadDramaProject(directory, projectId);
+    const character = data.project.characters.find(item => item.id === characterId);
+    const before = character?.looks?.map(item => item.id) ?? [];
+    const look = await createDramaCharacterLook(data.files, data.project, characterId, { ...input, ...(lookId ? { id: lookId } : {}) }, data.manifestPath);
+    const saved = (await loadDramaProject(directory, projectId)).project.characters.find(item => item.id === characterId)?.looks?.find(item => item.id === look.id);
+    if (!saved) throw new Error("人物造型写入后回读校验失败");
+    return { look: saved, deduplicated: before.includes(look.id), verified: true };
+  }));
+  add("updateCharacterLook", "更新指定人物的服装/造型版本，不允许跨人物修改。", dramaProjectSchema.extend({ characterId: z.string().min(1).max(256), lookId: z.string().min(1).max(256), ...dramaCharacterLookFields }), async ({ projectId, characterId, lookId, ...patch }, directory) => withDramaWriteLock(directory, async () => {
+    if (!Object.keys(patch).length) throw new Error("至少提供一个造型字段");
+    await validateDramaReferencePath(directory, patch.referencePath);
+    const data = await loadDramaProject(directory, projectId);
+    const look = await updateDramaCharacterLook(data.files, data.project, characterId, lookId, patch, data.manifestPath);
+    const saved = (await loadDramaProject(directory, projectId)).project.characters.find(item => item.id === characterId)?.looks?.find(item => item.id === lookId);
+    if (!saved || saved.version !== look.version) throw new Error("人物造型写入后回读校验失败");
+    return { look: saved, verified: true };
+  }));
+  add("createDramaAsset", "创建项目内的场景、道具或图片素材记录并校验全部归属关系；不会创建或生成媒体文件。", dramaProjectSchema.extend({
+    assetId: z.uuid().optional(), kind: z.enum(["scene", "prop", "image"]), ...dramaAssetFields, name: z.string().trim().min(1).max(500),
+  }), async ({ projectId, assetId, ...input }, directory) => withDramaWriteLock(directory, async () => {
+    await validateDramaReferencePath(directory, input.referencePath);
+    const data = await loadDramaProject(directory, projectId);
+    const before = new Set(data.project.assets.map(item => item.id));
+    const asset = await createDramaAsset(data.files, data.project, { ...input, ...(assetId ? { id: assetId } : {}) }, data.manifestPath);
+    const saved = (await loadDramaProject(directory, projectId)).project.assets.find(item => item.id === asset.id);
+    if (!saved) throw new Error("资产写入后回读校验失败");
+    return { asset: saved, deduplicated: before.has(asset.id), verified: true };
+  }));
+  add("updateDramaAsset", "更新项目内资产说明、引用路径和人物/场景/镜头关系；不能替换已生成图片的文件路径。", dramaProjectSchema.extend({ assetId: z.string().min(1).max(256), ...dramaAssetFields }), async ({ projectId, assetId, ...patch }, directory) => withDramaWriteLock(directory, async () => {
+    if (!Object.keys(patch).length) throw new Error("至少提供一个资产字段");
+    await validateDramaReferencePath(directory, patch.referencePath);
+    const data = await loadDramaProject(directory, projectId);
+    const asset = await updateDramaAsset(data.files, data.project, assetId, patch, data.manifestPath);
+    const saved = (await loadDramaProject(directory, projectId)).project.assets.find(item => item.id === assetId);
+    if (!saved || saved.version !== asset.version) throw new Error("资产写入后回读校验失败");
+    return { asset: saved, verified: true };
+  }));
+  add("createScene", "在指定剧集创建场景；使用 sceneId 或场次标识（heading、location、time）作为稳定键，并校验人物、剧本版本及图片素材归属。", dramaEpisodeSchema.extend({ sceneId: z.uuid().optional(), ...dramaSceneCreateFields }), async ({ projectId, episodeId, sceneId, ...input }, directory) => withDramaWriteLock(directory, async () => {
+    if (!sceneId && !(input.heading?.trim() && input.location?.trim())) throw new Error("创建场景必须提供 sceneId，或同时提供 heading 和 location，以便安全重试");
+    await validateDramaReferencePath(directory, input.referencePath);
+    const data = await loadDramaProject(directory, projectId);
+    const before = new Set(requireEpisode(data.project, episodeId).scenes.map(item => item.id));
+    const scene = await createDramaScene(data.files, data.project, episodeId, { ...input, ...(sceneId ? { id: sceneId } : {}) }, data.manifestPath);
+    const saved = requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId).scenes.find(item => item.id === scene.id);
+    if (!saved) throw new Error("场景写入后回读校验失败");
+    return { scene: saved, deduplicated: before.has(scene.id), verified: true };
+  }));
+  add("updateScene", "按稳定 sceneId 更新指定剧集中的场景；完整开放环境、色彩、布局、生图提示词及素材关系，并校验归属。", dramaEpisodeSchema.extend({ sceneId: z.string().min(1).max(256), ...dramaSceneFields }), async ({ projectId, episodeId, sceneId, ...patch }, directory) => withDramaWriteLock(directory, async () => {
+    await validateDramaReferencePath(directory, patch.referencePath);
+    const data = await loadDramaProject(directory, projectId);
+    const scene = await updateDramaScene(data.files, data.project, episodeId, sceneId, patch, data.manifestPath);
+    const saved = requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId).scenes.find(item => item.id === sceneId);
+    if (!saved || JSON.stringify(saved) !== JSON.stringify(scene)) throw new Error("场景写入后回读校验失败");
+    return { scene: saved, verified: true };
+  }));
+  add("createShot", "在指定剧集和场景创建导演镜头；使用 shotId、镜号或完整时间码作为稳定键，开放人物 ID 与图片/视频提示词。", dramaEpisodeSchema.extend({ shotId: z.uuid().optional(), ...dramaShotCreateFields, sceneId: z.string().min(1).max(256) }), async ({ projectId, episodeId, shotId, ...input }, directory) => withDramaWriteLock(directory, async () => {
+    if (!shotId && !input.number && !(input.startTime && input.endTime)) throw new Error("创建镜头必须提供 shotId、number 或完整开始和结束时间码，以便安全重试");
+    await validateDramaReferencePath(directory, input.referencePath);
+    const data = await loadDramaProject(directory, projectId);
+    const before = new Set(requireEpisode(data.project, episodeId).shots.map(item => item.id));
+    const shot = await createDramaShot(data.files, data.project, episodeId, { ...input, ...(shotId ? { id: shotId } : {}) }, data.manifestPath);
+    const saved = requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId).shots.find(item => item.id === shot.id);
+    if (!saved) throw new Error("镜头写入后回读校验失败");
+    return { shot: saved, deduplicated: before.has(shot.id), verified: true };
+  }));
+  add("updateShot", "按稳定 shotId 更新指定剧集中的镜头；开放人物 ID、时间码及图片/视频提示词，并校验归属。", dramaEpisodeSchema.extend({ shotId: z.string().min(1).max(256), ...dramaShotFields }), async ({ projectId, episodeId, shotId, ...patch }, directory) => withDramaWriteLock(directory, async () => {
+    if (!Object.keys(patch).length) throw new Error("至少提供一个镜头字段");
+    await validateDramaReferencePath(directory, patch.referencePath);
+    const data = await loadDramaProject(directory, projectId);
+    const shot = await updateDramaShot(data.files, data.project, episodeId, shotId, patch, data.manifestPath);
+    const saved = requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId).shots.find(item => item.id === shotId);
+    if (!saved || JSON.stringify(saved) !== JSON.stringify(shot)) throw new Error("镜头写入后回读校验失败");
+    return { shot: saved, verified: true };
+  }));
+  const batchSchema = z.strictObject({ operations: z.array(z.strictObject({ tool: z.enum(["saveEpisodeDraft", "createScriptVersion", "createSeason", "createEpisode", "updateDramaProject", "updateEpisode", "createCharacter", "updateCharacter", "createCharacterLook", "updateCharacterLook", "createDramaAsset", "updateDramaAsset", "createScene", "updateScene", "createShot", "updateShot"]), args: z.record(z.string(), z.unknown()) })).min(1).max(25) });
+  tools.push(wrapTool("applyDramaBatch", "在同一工作区、同一项目内顺序执行最多25项写操作；失败后停止并返回已完成、失败、未执行项，重试可复用创建请求中的稳定 ID。每项单独读回核验，不提供跨文件事务回滚；批处理不含正式剧本确认操作。", z.toJSONSchema(batchSchema), async (raw, target, signal) => {
     const { operations } = batchSchema.parse(raw);
     const directory = await resolveDramaWorkspace(target);
     const projectIds = new Set(operations.map(item => item.args.projectId).filter((id): id is string => typeof id === "string"));
@@ -270,7 +477,12 @@ function getDramaTools(): McpTool[] {
         break;
       }
     }
-    return { results, completed: results.filter(item => item.status === "verified").length, failed: results.filter(item => item.status === "failed").length, notRun: operations.length - results.length, partialWritesPossible: results.some(item => item.status === "verified") && results.some(item => item.status === "failed") };
+    const failed = results.find(item => item.status === "failed");
+    return {
+      results, completed: results.filter(item => item.status === "verified").length, failed: results.filter(item => item.status === "failed").length,
+      notRun: operations.length - results.length, failedIndex: failed?.index ?? null, resumeIndex: failed?.index ?? operations.length,
+      partialWritesPossible: !!failed, recoveryHint: failed ? "已完成项不会回滚；从 resumeIndex 对应操作恢复。重试创建操作时复用原稳定 ID，保存同一工作稿正文可安全去重；失败项若涉及文件写入，先查询项目状态再决定是否重试。" : "全部操作已逐项回读验证。",
+    };
   }));
   return tools;
 }

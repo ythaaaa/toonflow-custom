@@ -15,7 +15,8 @@ export type DramaSeason = { id: string; name: string; episodes: string[] };
 export type DramaEpisode = { id: string; seasonId: string; number: number; title: string; outline: string; scriptVersion: number; scriptPath?: string; draftPath?: string; formalVersionId?: string; characterIds?: string[]; status: DramaStatus; scenes: DramaScene[]; shots: DramaShot[] };
 export type DramaScene = { id: string; number: number; order?: number; archived?: boolean; sourceScriptVersionId?: string; heading: string; time: string; location: string; interiorExterior?: "内景" | "外景"; dayPart?: "白天" | "夜晚" | "黄昏" | "清晨"; characters: string[]; charactersText: string; description: string; environment?: string; color?: string; layout?: string; prompt?: string; referenceAssetId?: string };
 export type DramaShot = { id: string; number: string; order?: number; archived?: boolean; sceneId: string; characterIds?: string[]; startTime?: string; endTime?: string; description: string; action: string; expression: string; size: string; angle: string; composition?: string; movement: string; dialogue: string; sound: string; duration: number; imagePrompt?: string; videoPrompt?: string; referencePath: string; firstFrameAssetId?: string; lastFrameAssetId?: string; referenceAssetIds?: string[]; aspectRatio?: string; productionStatus?: DramaProductionStatus; reviewStatus?: DramaStatus; status: DramaStatus };
-export type DramaCharacter = { id: string; archived?: boolean; name: string; description: string; appearance: string; identity?: string; outfit?: string; visualFeatures?: string[]; prompt?: string; referencePath: string; version: number };
+export type DramaCharacterLook = { id: string; name: string; age?: string; appearance?: string; hairstyle?: string; outfit: string; visualFeatures?: string[]; prompt?: string; referencePath?: string; referenceAssetIds?: string[]; archived?: boolean; version: number };
+export type DramaCharacter = { id: string; archived?: boolean; name: string; description: string; appearance: string; age?: string; identity?: string; hairstyle?: string; outfit?: string; visualFeatures?: string[]; prompt?: string; referencePath: string; looks?: DramaCharacterLook[]; version: number };
 export type DramaAsset = { id: string; kind: "scene" | "prop" | "image"; name: string; description: string; referencePath: string; version: number;
   generatedBy?: "gptImageSubscription"; modelId?: string; generatedAt?: string; requestedAspectRatio?: string; width?: number; height?: number;
   referenceAssetIds?: string[]; projectId?: string; episodeId?: string; sceneId?: string; shotId?: string; characterId?: string };
@@ -172,6 +173,22 @@ export async function readEpisodeScript(files: DramaWorkspaceFiles, project: Dra
   return "";
 }
 
+export async function readEpisodeDraftSnapshot(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, manifestPath = legacyManifestPath) {
+  const episode = project.episodes.find(item => item.id === episodeId);
+  if (!episode) throw new Error("目标分集不存在");
+  const path = episode.draftPath ?? `${getProjectRoot(manifestPath)}/scripts/${episode.id}/draft.md`;
+  try {
+    if (files.readTextSnapshot) {
+      const snapshot = await files.readTextSnapshot(path);
+      return { path, content: snapshot.text, revision: snapshot.revision };
+    }
+    return { path, content: await files.readText(path), revision: null };
+  } catch (error) {
+    if (!episode.draftPath && isMissingError(error)) return { path, content: "", revision: null };
+    throw error;
+  }
+}
+
 export async function listDramaProjects(files: DramaWorkspaceFiles) {
   const root = `${dataPath}/projects`;
   const paths = [legacyManifestPath];
@@ -266,16 +283,109 @@ export async function saveDramaProject(files: DramaWorkspaceFiles, project: Dram
   await saveProjectSnapshot(files, project, manifestPath);
 }
 
-export async function createCharacter(files: DramaWorkspaceFiles, project: DramaProject, input: Partial<Omit<DramaCharacter, "id" | "version">>, manifestPath = legacyManifestPath) {
+export async function createCharacter(files: DramaWorkspaceFiles, project: DramaProject, input: Partial<Omit<DramaCharacter, "version" | "archived">>, manifestPath = legacyManifestPath) {
   const snapshot = cloneProject(project);
+  const name = input.name?.trim() ?? "";
+  if (!name) throw new Error("人物名称不能为空");
+  const existing = snapshot.characters.find(item => item.id === (input as Partial<DramaCharacter>).id
+    || (!item.archived && item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase()));
+  if (existing) {
+    if (input.id && existing.id !== input.id) throw new Error("同名人物已使用其他稳定 ID，请查询后使用 updateCharacter 修改");
+    const fields = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "id" && key !== "version"));
+    const matches = Object.entries(fields).every(([key, value]) => JSON.stringify((existing as unknown as Record<string, unknown>)[key]) === JSON.stringify(value));
+    if (matches) return existing;
+    throw new Error(existing.id === (input as Partial<DramaCharacter>).id
+      ? "人物 ID 已存在且内容不同，请使用 updateCharacter"
+      : `项目中已有人物“${existing.name}”，请使用 updateCharacter 修改`);
+  }
   const character: DramaCharacter = {
-    id: crypto.randomUUID(), archived: false, name: input.name ?? "", description: input.description ?? "",
+    ...input, id: input.id ?? crypto.randomUUID(), archived: false, name, description: input.description ?? "",
     appearance: input.appearance ?? "", referencePath: input.referencePath ?? "", version: 1,
   };
+  validateCharacterLooks(snapshot, character);
   snapshot.characters.push(character);
   await saveProjectSnapshot(files, snapshot, manifestPath);
   applyDramaProjectSnapshot(project, snapshot);
   return character;
+}
+
+export async function updateCharacter(files: DramaWorkspaceFiles, project: DramaProject, characterId: string, patch: Partial<Omit<DramaCharacter, "id" | "version" | "looks">>, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const character = snapshot.characters.find(item => item.id === characterId);
+  if (!character) throw new Error("目标人物不存在或不属于指定项目");
+  const name = patch.name?.trim();
+  if (patch.name !== undefined && !name) throw new Error("人物名称不能为空");
+  if (name && snapshot.characters.some(item => item.id !== characterId && !item.archived && item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+    throw new Error(`项目中已有人物“${name}”`);
+  }
+  const changed = Object.entries(patch).some(([key, value]) => JSON.stringify((character as unknown as Record<string, unknown>)[key]) !== JSON.stringify(value));
+  if (!changed) return character;
+  Object.assign(character, patch, name ? { name } : {});
+  character.version += 1;
+  validateCharacterLooks(snapshot, character);
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  applyDramaProjectSnapshot(project, snapshot);
+  return character;
+}
+
+export async function createCharacterLook(files: DramaWorkspaceFiles, project: DramaProject, characterId: string, input: Partial<Omit<DramaCharacterLook, "id" | "version">> & { id?: string }, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const character = snapshot.characters.find(item => item.id === characterId && !item.archived);
+  if (!character) throw new Error("目标人物不存在或已归档");
+  const name = input.name?.trim() ?? "";
+  if (!name || !input.outfit?.trim()) throw new Error("造型名称和服装描述不能为空");
+  character.looks ??= [];
+  const existing = character.looks.find(item => item.id === input.id || (!item.archived && item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase()));
+  if (existing) {
+    if (input.id && existing.id !== input.id) throw new Error("同名造型已使用其他稳定 ID");
+    const fields = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "id" && key !== "version"));
+    const matches = Object.entries(fields).every(([key, value]) => JSON.stringify((existing as unknown as Record<string, unknown>)[key]) === JSON.stringify(value));
+    if (matches) return existing;
+    throw new Error(existing.id === input.id ? "造型 ID 已存在且内容不同，请使用 updateCharacterLook" : `人物“${character.name}”已有造型“${existing.name}”`);
+  }
+  const look: DramaCharacterLook = { ...input, id: input.id ?? crypto.randomUUID(), name, outfit: input.outfit, version: 1, archived: false };
+  validateCharacterLook(snapshot, look);
+  character.looks.push(look);
+  character.version += 1;
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  applyDramaProjectSnapshot(project, snapshot);
+  return look;
+}
+
+export async function updateCharacterLook(files: DramaWorkspaceFiles, project: DramaProject, characterId: string, lookId: string, patch: Partial<Omit<DramaCharacterLook, "id" | "version">>, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const character = snapshot.characters.find(item => item.id === characterId);
+  const look = character?.looks?.find(item => item.id === lookId);
+  if (!character || !look) throw new Error("目标人物造型不存在或不属于指定人物");
+  const name = patch.name?.trim();
+  if (patch.name !== undefined && !name) throw new Error("造型名称不能为空");
+  if (name && character.looks?.some(item => item.id !== lookId && !item.archived && item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error(`人物“${character.name}”已有造型“${name}”`);
+  const changed = Object.entries(patch).some(([key, value]) => JSON.stringify((look as unknown as Record<string, unknown>)[key]) !== JSON.stringify(value));
+  if (!changed) return look;
+  Object.assign(look, patch, name ? { name } : {});
+  look.version += 1;
+  validateCharacterLook(snapshot, look);
+  character.version += 1;
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  applyDramaProjectSnapshot(project, snapshot);
+  return look;
+}
+
+function validateCharacterLooks(project: DramaProject, character: DramaCharacter) {
+  const names = new Set<string>();
+  const ids = new Set<string>();
+  for (const look of character.looks ?? []) {
+    const name = look.name.trim().toLocaleLowerCase();
+    if (!name || names.has(name) || ids.has(look.id)) throw new Error("人物造型名称和 ID 必须唯一且非空");
+    names.add(name);
+    ids.add(look.id);
+    validateCharacterLook(project, look);
+  }
+}
+
+function validateCharacterLook(project: DramaProject, look: DramaCharacterLook) {
+  const assetIds = new Set(project.assets.map(item => item.id));
+  for (const id of look.referenceAssetIds ?? []) if (!assetIds.has(id)) throw new Error(`人物造型参考素材 ${id} 不属于当前项目`);
 }
 
 export async function duplicateCharacter(files: DramaWorkspaceFiles, project: DramaProject, characterId: string, manifestPath = legacyManifestPath) {
@@ -284,9 +394,11 @@ export async function duplicateCharacter(files: DramaWorkspaceFiles, project: Dr
   if (!source) throw new Error("要复制的人物不存在或已归档");
   const character: DramaCharacter = { ...source, id: crypto.randomUUID(), archived: false, version: 1 };
   snapshot.characters.push(character);
-  for (const asset of snapshot.assets.filter(item => item.characterId === source.id)) {
-    snapshot.assets.push({ ...asset, id: crypto.randomUUID(), characterId: character.id });
-  }
+  const assetIds = new Map<string, string>();
+  const characterAssets = snapshot.assets.filter(item => item.characterId === source.id);
+  for (const asset of characterAssets) assetIds.set(asset.id, crypto.randomUUID());
+  for (const asset of characterAssets) snapshot.assets.push({ ...asset, id: assetIds.get(asset.id)!, characterId: character.id });
+  character.looks = character.looks?.map(look => ({ ...look, id: crypto.randomUUID(), referenceAssetIds: look.referenceAssetIds?.map(id => assetIds.get(id) ?? id) }));
   await saveProjectSnapshot(files, snapshot, manifestPath);
   applyDramaProjectSnapshot(project, snapshot);
   return character;
@@ -318,17 +430,17 @@ export async function updateScriptReview(files: DramaWorkspaceFiles, project: Dr
   applyDramaProjectSnapshot(project, snapshot);
 }
 
-export async function createDramaProject(files: DramaWorkspaceFiles, input: Pick<DramaProject, "name" | "genre" | "style" | "targetEpisodes" | "targetDuration">) {
+export async function createDramaProject(files: DramaWorkspaceFiles, input: Pick<DramaProject, "name" | "genre" | "style" | "targetEpisodes" | "targetDuration"> & { storyOutline?: string; id?: string }) {
   const name = input.name.trim();
   if (!name || name.length > 120) throw new Error("短剧项目名称必须为 1 至 120 个字符");
   const projects = await listDramaProjects(files);
   if (projects.some(item => item.project.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error("当前工作区已有同名短剧项目，请修改项目名称");
   const project: DramaProject = {
     schemaVersion: 1,
-    id: crypto.randomUUID(),
+    id: input.id ?? crypto.randomUUID(),
     ...input,
     name,
-    storyOutline: "",
+    storyOutline: input.storyOutline ?? "",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     seasons: [],
@@ -402,8 +514,17 @@ export async function deleteDramaProject(files: DramaWorkspaceFiles, projectId: 
   return { id: entry.project.id, name: entry.project.name, path: entry.path };
 }
 
-export function createSeason(project: DramaProject, name: string, episodeCount: number) {
-  const season: DramaSeason = { id: crypto.randomUUID(), name, episodes: [] };
+export function createSeason(project: DramaProject, name: string, episodeCount = 0, seasonId?: string) {
+  name = name.trim();
+  if (!name || name.length > 120) throw new Error("季度名称必须为 1 至 120 个字符");
+  if (!Number.isInteger(episodeCount) || episodeCount < 0 || episodeCount > 500) throw new Error("季度预建集数必须为 0 至 500 的整数");
+  const existing = project.seasons.find(item => item.id === seasonId || item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+  if (existing) {
+    if (seasonId && existing.id !== seasonId) throw new Error("同名季度已使用其他稳定 ID");
+    if (existing.name.trim().toLocaleLowerCase() !== name.toLocaleLowerCase() || existing.episodes.length !== episodeCount) throw new Error("季度已存在但名称或预建集数不同；请查询季度后继续，不能重复创建");
+    return existing;
+  }
+  const season: DramaSeason = { id: seasonId ?? crypto.randomUUID(), name, episodes: [] };
   for (let number = 1; number <= episodeCount; number++) {
     const episode: DramaEpisode = {
       id: crypto.randomUUID(), seasonId: season.id, number, title: `第${String(number).padStart(3, "0")}集`, outline: "", scriptVersion: 0,
@@ -413,23 +534,30 @@ export function createSeason(project: DramaProject, name: string, episodeCount: 
     season.episodes.push(episode.id);
   }
   project.seasons.push(season);
-  project.targetEpisodes = project.episodes.length;
+  if (episodeCount > 0) project.targetEpisodes = Math.max(project.targetEpisodes, project.episodes.length);
   project.updatedAt = new Date().toISOString();
   return season;
 }
 
-export async function createEpisode(files: DramaWorkspaceFiles, project: DramaProject, seasonId: string, input: { title?: string; outline?: string }, manifestPath: string) {
+export async function createEpisode(files: DramaWorkspaceFiles, project: DramaProject, seasonId: string, input: { id?: string; title?: string; outline?: string }, manifestPath: string) {
   const season = project.seasons.find(item => item.id === seasonId);
   if (!season) throw new Error("目标季度不存在");
+  const title = input.title?.trim();
+  const existing = project.episodes.find(item => item.id === input.id || (title && item.seasonId === seasonId && item.title.trim().toLocaleLowerCase() === title.toLocaleLowerCase()));
+  if (existing) {
+    if (input.id && existing.id !== input.id) throw new Error("同标题分集已使用其他稳定 ID；请查询分集后继续");
+    if (existing.seasonId === seasonId && existing.title === (title || existing.title) && existing.outline === (input.outline ?? existing.outline)) return existing;
+    throw new Error("分集 ID 或标题已存在且内容不同；请查询后使用 updateEpisode 修改");
+  }
   const episode: DramaEpisode = {
-    id: crypto.randomUUID(), seasonId, number: Math.max(0, ...project.episodes.filter(item => item.seasonId === seasonId).map(item => item.number)) + 1,
-    title: input.title?.trim() || `第${String(season.episodes.length + 1).padStart(3, "0")}集`, outline: input.outline ?? "", scriptVersion: 0,
+    id: input.id ?? crypto.randomUUID(), seasonId, number: Math.max(0, ...project.episodes.filter(item => item.seasonId === seasonId).map(item => item.number)) + 1,
+    title: title || `第${String(season.episodes.length + 1).padStart(3, "0")}集`, outline: input.outline ?? "", scriptVersion: 0,
     status: "草稿", scenes: [], shots: [],
   };
   const snapshot = cloneProject(project);
   snapshot.episodes.push(episode);
   snapshot.seasons.find(item => item.id === seasonId)!.episodes.push(episode.id);
-  snapshot.targetEpisodes = snapshot.episodes.length;
+  snapshot.targetEpisodes = Math.max(snapshot.targetEpisodes, snapshot.episodes.length);
   await saveProjectSnapshot(files, snapshot, manifestPath);
   applyDramaProjectSnapshot(project, snapshot);
   return episode;
@@ -446,12 +574,42 @@ export async function updateEpisode(files: DramaWorkspaceFiles, project: DramaPr
   return episode;
 }
 
-export async function createScene(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, input: Partial<Omit<DramaScene, "id" | "number" | "order">>, manifestPath: string) {
+export async function updateDramaProject(files: DramaWorkspaceFiles, project: DramaProject, patch: Partial<Pick<DramaProject, "name" | "genre" | "style" | "storyOutline" | "targetEpisodes" | "targetDuration">>, manifestPath: string) {
+  const snapshot = cloneProject(project);
+  const name = patch.name?.trim();
+  if (patch.name !== undefined && (!name || name.length > 120)) throw new Error("短剧项目名称必须为 1 至 120 个字符");
+  if (name) {
+    const projects = await listDramaProjects(files);
+    if (projects.some(item => item.project.id !== project.id && item.project.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error("当前工作区已有同名短剧项目");
+  }
+  if (Object.entries(patch).every(([key, value]) => snapshot[key as keyof DramaProject] === value)) return project;
+  Object.assign(snapshot, patch, name ? { name } : {});
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  applyDramaProjectSnapshot(project, snapshot);
+  return snapshot;
+}
+
+export async function createScene(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, input: Partial<Omit<DramaScene, "number" | "order" | "archived">>, manifestPath: string) {
   const snapshot = cloneProject(project);
   const episode = snapshot.episodes.find(item => item.id === episodeId);
   if (!episode) throw new Error("目标分集不存在");
+  if (input.id && snapshot.episodes.some(item => item.id !== episodeId && item.scenes.some(scene => scene.id === input.id))) throw new Error("sceneId 已被项目中的其他分集使用");
+  if (input.sourceScriptVersionId && !snapshot.scriptVersions[episodeId]?.some(version => version.id === input.sourceScriptVersionId)) throw new Error("场景剧本关联必须使用此分集中的稳定剧本版本 ID");
+  const existing = episode.scenes.find(item => item.id === input.id || (!input.id && input.heading?.trim() && input.location?.trim()
+    && item.heading.trim().toLocaleLowerCase() === input.heading.trim().toLocaleLowerCase()
+    && item.location.trim().toLocaleLowerCase() === input.location.trim().toLocaleLowerCase()
+    && item.time.trim().toLocaleLowerCase() === (input.time ?? "").trim().toLocaleLowerCase()));
+  if (existing) {
+    if (input.id && existing.id !== input.id) throw new Error("相同场次标识已使用其他稳定 ID；请查询后使用 updateScene 修改");
+    const fields = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "id" && key !== "archived" && key !== "order"));
+    const matches = Object.entries(fields).every(([key, value]) => JSON.stringify((existing as unknown as Record<string, unknown>)[key]) === JSON.stringify(value));
+    if (matches) return existing;
+    throw new Error("场景 ID 或相同场次标识已存在且内容不同；请使用 updateScene 修改");
+  }
+  if (input.characters?.some(id => !snapshot.characters.some(character => character.id === id && !character.archived))) throw new Error("场景人物关联必须使用当前项目中未归档的人物 ID");
+  if (input.referenceAssetId && !snapshot.assets.some(asset => asset.id === input.referenceAssetId && asset.kind === "image")) throw new Error("场景参考素材必须使用当前项目中的图片资产 ID");
   const scene: DramaScene = {
-    id: crypto.randomUUID(), number: Math.max(0, ...episode.scenes.map(item => item.number)) + 1,
+    ...input, id: input.id ?? crypto.randomUUID(), number: Math.max(0, ...episode.scenes.map(item => item.number)) + 1,
     order: Math.max(0, ...episode.scenes.map(item => item.order ?? item.number)) + 1, archived: false,
     heading: input.heading ?? "", time: input.time ?? "", location: input.location ?? "", interiorExterior: input.interiorExterior ?? "内景",
     dayPart: input.dayPart ?? "白天", characters: input.characters ?? [], charactersText: input.charactersText ?? "", description: input.description ?? "",
@@ -469,6 +627,8 @@ export async function updateScene(files: DramaWorkspaceFiles, project: DramaProj
   const scene = episode?.scenes.find(item => item.id === sceneId);
   if (!scene) throw new Error("目标场景不存在或不属于指定分集");
   if (patch.sourceScriptVersionId && !snapshot.scriptVersions[episodeId]?.some(version => version.id === patch.sourceScriptVersionId)) throw new Error("场景剧本关联必须使用此分集中的稳定剧本版本 ID");
+  if (patch.characters?.some(id => !snapshot.characters.some(character => character.id === id && !character.archived))) throw new Error("场景人物关联必须使用当前项目中未归档的人物 ID");
+  if (patch.referenceAssetId && !snapshot.assets.some(asset => asset.id === patch.referenceAssetId && asset.kind === "image")) throw new Error("场景参考素材必须使用当前项目中的图片资产 ID");
   Object.assign(scene, patch);
   await saveProjectSnapshot(files, snapshot, manifestPath);
   applyDramaProjectSnapshot(project, snapshot);
@@ -511,14 +671,27 @@ export async function archiveScene(files: DramaWorkspaceFiles, project: DramaPro
   return scene;
 }
 
-export async function createShot(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, input: Partial<Omit<DramaShot, "id" | "number" | "order">> & { sceneId?: string }, manifestPath: string) {
+export async function createShot(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, input: Partial<Omit<DramaShot, "order" | "archived">>, manifestPath: string) {
   const snapshot = cloneProject(project);
   const episode = snapshot.episodes.find(item => item.id === episodeId);
   if (!episode) throw new Error("目标分集不存在");
+  if (input.id && snapshot.episodes.some(item => item.id !== episodeId && item.shots.some(shot => shot.id === input.id))) throw new Error("shotId 已被项目中的其他分集使用");
   if (input.sceneId && !episode.scenes.some(item => item.id === input.sceneId && !item.archived)) throw new Error("镜头必须关联此分集内未归档的场景");
+  const existing = episode.shots.find(item => item.id === input.id || (input.number && item.number.toLocaleLowerCase() === input.number.toLocaleLowerCase())
+    || (!input.id && !input.number && input.sceneId && input.startTime && input.endTime && item.sceneId === input.sceneId && item.startTime === input.startTime && item.endTime === input.endTime));
+  if (existing) {
+    if (input.id && existing.id !== input.id) throw new Error("镜号或时间码已使用其他稳定 ID；请查询后使用 updateShot 修改");
+    const fields = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "id" && key !== "order"));
+    const matches = Object.entries(fields).every(([key, value]) => JSON.stringify((existing as unknown as Record<string, unknown>)[key]) === JSON.stringify(value));
+    if (matches) return existing;
+    throw new Error("镜头 ID 或镜号已存在且内容不同；请使用 updateShot 修改");
+  }
+  if (input.characterIds?.some(id => !snapshot.characters.some(character => character.id === id && !character.archived))) throw new Error("镜头人物关联必须使用当前项目中未归档的人物 ID");
+  if ((input.startTime && !input.endTime) || (!input.startTime && input.endTime)) throw new Error("镜头开始和结束时间码必须同时提供");
+  if (input.duration !== undefined && (!Number.isFinite(input.duration) || input.duration <= 0)) throw new Error("镜头时长必须是正数");
   const maxShotNumber = Math.max(0, ...episode.shots.map(item => Number(item.number.match(/\d+$/)?.[0] ?? 0)));
   const shot: DramaShot = {
-    id: crypto.randomUUID(), number: `SH${String(maxShotNumber + 1).padStart(3, "0")}`,
+    ...input, id: input.id ?? crypto.randomUUID(), number: input.number ?? `SH${String(maxShotNumber + 1).padStart(3, "0")}`,
     order: Math.max(0, ...episode.shots.map(item => item.order ?? 0)) + 1, archived: false, sceneId: input.sceneId ?? "",
     description: input.description ?? "", action: input.action ?? "", expression: input.expression ?? "", size: input.size ?? "", angle: input.angle ?? "",
     composition: input.composition ?? "", movement: input.movement ?? "", dialogue: input.dialogue ?? "", sound: input.sound ?? "", duration: input.duration ?? 3,
@@ -562,13 +735,18 @@ export async function archiveShot(files: DramaWorkspaceFiles, project: DramaProj
   return shot;
 }
 
-export async function updateShot(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, shotId: string, patch: Partial<Omit<DramaShot, "id" | "number">>, manifestPath: string) {
+export async function updateShot(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, shotId: string, patch: Partial<Omit<DramaShot, "id">>, manifestPath: string) {
   const snapshot = cloneProject(project);
   const episode = snapshot.episodes.find(item => item.id === episodeId);
   const shot = episode?.shots.find(item => item.id === shotId);
   if (!episode || !shot) throw new Error("目标镜头不存在或不属于指定分集");
-  if (patch.sceneId && !episode.scenes.some(item => item.id === patch.sceneId && !item.archived)) throw new Error("镜头必须关联此分集内未归档的场景");
-  if (patch.characterIds && patch.characterIds.some(id => !project.characters.some(character => character.id === id))) throw new Error("镜头人物关联必须使用此项目中的稳定人物 ID");
+  if (patch.sceneId !== undefined && !episode.scenes.some(item => item.id === patch.sceneId && !item.archived)) throw new Error("镜头必须关联此分集内未归档的场景");
+  if (patch.number !== undefined && episode.shots.some(item => item.id !== shotId && item.number.toLocaleLowerCase() === patch.number!.toLocaleLowerCase())) throw new Error(`镜号 ${patch.number} 已在此分集中使用`);
+  if (patch.characterIds && patch.characterIds.some(id => !project.characters.some(character => character.id === id && !character.archived))) throw new Error("镜头人物关联必须使用此项目中未归档人物的稳定 ID");
+  const startTime = patch.startTime ?? shot.startTime;
+  const endTime = patch.endTime ?? shot.endTime;
+  if ((startTime && !endTime) || (!startTime && endTime)) throw new Error("镜头开始和结束时间码必须同时提供");
+  if (patch.duration !== undefined && (!Number.isFinite(patch.duration) || patch.duration <= 0)) throw new Error("镜头时长必须是正数");
   Object.assign(shot, patch);
   validateShotAssetLinks(project, shot);
   await saveProjectSnapshot(files, snapshot, manifestPath);
@@ -583,6 +761,73 @@ function validateShotAssetLinks(project: DramaProject, shot: DramaShot) {
   }
   const referenceIds = new Set([...project.assets, ...project.characters].map(item => item.id));
   for (const id of shot.referenceAssetIds ?? []) if (!referenceIds.has(id)) throw new Error(`参考素材 ${id} 不属于当前项目`);
+}
+
+export async function createDramaAsset(files: DramaWorkspaceFiles, project: DramaProject, input: Partial<Omit<DramaAsset, "version" | "projectId" | "generatedBy" | "modelId" | "generatedAt" | "requestedAspectRatio" | "width" | "height">> & Pick<DramaAsset, "kind" | "name">, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const name = input.name.trim();
+  if (!name) throw new Error("资产名称不能为空");
+  const existing = snapshot.assets.find(item => item.id === input.id || (item.kind === input.kind && item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase()
+    && item.episodeId === input.episodeId && item.sceneId === input.sceneId && item.shotId === input.shotId && item.characterId === input.characterId));
+  if (existing) {
+    if (input.id && existing.id !== input.id) throw new Error("同名同关联资产已使用其他稳定 ID，请查询后使用 updateDramaAsset 修改");
+    const fields = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "id" && key !== "version"));
+    const matches = Object.entries(fields).every(([key, value]) => JSON.stringify((existing as unknown as Record<string, unknown>)[key]) === JSON.stringify(value));
+    if (matches) return existing;
+    throw new Error(existing.id === input.id ? "资产 ID 已存在且内容不同，请使用 updateDramaAsset" : `项目中已存在同名同关联资产“${name}”，请使用 updateDramaAsset 修改`);
+  }
+  const asset: DramaAsset = {
+    ...input, id: input.id ?? crypto.randomUUID(), kind: input.kind, name, description: input.description ?? "",
+    referencePath: input.referencePath ?? "", version: 1, projectId: project.id,
+  };
+  validateDramaAssetLinks(snapshot, asset);
+  snapshot.assets.push(asset);
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  applyDramaProjectSnapshot(project, snapshot);
+  return asset;
+}
+
+export async function updateDramaAsset(files: DramaWorkspaceFiles, project: DramaProject, assetId: string, patch: Partial<Pick<DramaAsset, "name" | "description" | "referencePath" | "referenceAssetIds" | "episodeId" | "sceneId" | "shotId" | "characterId">>, manifestPath = legacyManifestPath) {
+  const snapshot = cloneProject(project);
+  const asset = snapshot.assets.find(item => item.id === assetId);
+  if (!asset || (asset.projectId && asset.projectId !== project.id)) throw new Error("目标资产不存在或不属于指定项目");
+  if (asset.generatedBy && patch.referencePath !== undefined && patch.referencePath !== asset.referencePath) throw new Error("不能通过资产管理接口替换已生成图片的文件路径");
+  const name = patch.name?.trim();
+  if (patch.name !== undefined && !name) throw new Error("资产名称不能为空");
+  if (name && snapshot.assets.some(item => item.id !== assetId && item.kind === asset.kind && item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase()
+    && item.episodeId === (patch.episodeId ?? asset.episodeId) && item.sceneId === (patch.sceneId ?? asset.sceneId)
+    && item.shotId === (patch.shotId ?? asset.shotId) && item.characterId === (patch.characterId ?? asset.characterId))) throw new Error(`项目中已存在同名同关联资产“${name}”`);
+  const changed = asset.projectId !== project.id || Object.entries(patch).some(([key, value]) => JSON.stringify((asset as unknown as Record<string, unknown>)[key]) !== JSON.stringify(value));
+  Object.assign(asset, patch, name ? { name } : {}, { projectId: project.id });
+  if (!changed) return asset;
+  asset.version += 1;
+  validateDramaAssetLinks(snapshot, asset);
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  applyDramaProjectSnapshot(project, snapshot);
+  return asset;
+}
+
+function validateDramaAssetLinks(project: DramaProject, asset: DramaAsset) {
+  if (asset.projectId && asset.projectId !== project.id) throw new Error("资产 projectId 必须与当前项目一致");
+  const episode = asset.episodeId ? project.episodes.find(item => item.id === asset.episodeId) : undefined;
+  if (asset.episodeId && !episode) throw new Error("资产分集关联必须使用当前项目中的分集 ID");
+  const scenes = (episode ? [episode] : project.episodes).flatMap(item => item.scenes.filter(scene => !scene.archived).map(scene => ({ episode: item, scene })));
+  const scene = asset.sceneId ? scenes.find(item => item.scene.id === asset.sceneId) : undefined;
+  if (asset.sceneId && !scene) throw new Error("资产场景关联必须使用当前项目中的场景 ID");
+  if (episode && scene && scene.episode.id !== episode.id) throw new Error("资产的场景必须属于指定分集");
+  const shots = (episode ? [episode] : project.episodes).flatMap(item => item.shots.filter(shot => !shot.archived).map(shot => ({ episode: item, shot })));
+  const shot = asset.shotId ? shots.find(item => item.shot.id === asset.shotId) : undefined;
+  if (asset.shotId && !shot) throw new Error("资产镜头关联必须使用当前项目中的镜头 ID");
+  if (episode && shot && shot.episode.id !== episode.id) throw new Error("资产的镜头必须属于指定分集");
+  if (scene && shot && shot.shot.sceneId !== scene.scene.id) throw new Error("资产关联的场景与镜头不一致");
+  if (asset.characterId && !project.characters.some(item => item.id === asset.characterId && !item.archived)) throw new Error("资产人物关联必须使用当前项目中未归档的人物 ID");
+  const referenceIds = new Set<string>();
+  const availableReferences = new Set([...project.assets.filter(item => item.id !== asset.id).map(item => item.id), ...project.characters.filter(item => !item.archived).map(item => item.id)]);
+  for (const id of asset.referenceAssetIds ?? []) {
+    if (!availableReferences.has(id)) throw new Error(`参考资产 ${id} 不属于当前项目`);
+    if (referenceIds.has(id)) throw new Error(`参考资产 ${id} 重复关联`);
+    referenceIds.add(id);
+  }
 }
 
 function validateDramaScriptAnalysis(analysis: DramaScriptAnalysis) {
