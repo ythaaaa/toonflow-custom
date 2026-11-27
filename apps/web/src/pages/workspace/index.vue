@@ -354,6 +354,17 @@ registerWorkspaceControl({
       checkDirectory();
       return { panel: activePanel.value };
     }
+    if (request.name === "openDramaCanvas") {
+      const { projectId, episodeId } = request.args;
+      if (typeof projectId !== "string" || !projectId.trim() || typeof episodeId !== "string" || !episodeId.trim()) throw new Error("短剧画布需要有效的 projectId 与 episodeId");
+      if (!(await switchPanel("canvas"))) throw new Error("画布面板无法打开");
+      const panel = await waitForControlValue(() => canvasPanelRef.value?.canvasListReady ? canvasPanelRef.value : undefined, callSignal);
+      await panel.openDramaCanvas({ projectId, episodeId }, callSignal);
+      checkDirectory();
+      const context = await waitForControlValue(() => panel.getCanvasContext(), callSignal);
+      const canvas = await context.call({ name: "getCanvas", args: { include: ["nodeTypes"] } }, callSignal);
+      return { canvasId: panel.canvasId, projectId, episodeId, canvas };
+    }
     if (["getDocument", "openDocument", "writeDocument"].includes(request.name)) {
       if (!(await switchPanel("document"))) throw new Error("文档面板无法打开");
       const panel = await waitForControlValue(() => documentPanelRef.value?.ready ? documentPanelRef.value : undefined, callSignal);

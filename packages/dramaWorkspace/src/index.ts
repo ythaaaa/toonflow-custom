@@ -12,9 +12,10 @@ export type DramaWorkspaceFiles = {
   remove(path: string, recursive?: boolean): Promise<void>;
 };
 export type DramaSeason = { id: string; name: string; episodes: string[] };
-export type DramaEpisode = { id: string; seasonId: string; number: number; title: string; outline: string; scriptVersion: number; scriptPath?: string; draftPath?: string; formalVersionId?: string; characterIds?: string[]; status: DramaStatus; scenes: DramaScene[]; shots: DramaShot[] };
+export type DramaEpisode = { id: string; seasonId: string; number: number; title: string; outline: string; scriptVersion: number; scriptPath?: string; draftPath?: string; formalVersionId?: string; characterIds?: string[]; status: DramaStatus; scenes: DramaScene[]; shots: DramaShot[]; videoSegments?: DramaVideoSegment[] };
 export type DramaScene = { id: string; number: number; order?: number; archived?: boolean; sourceScriptVersionId?: string; heading: string; time: string; location: string; interiorExterior?: "内景" | "外景"; dayPart?: "白天" | "夜晚" | "黄昏" | "清晨"; characters: string[]; charactersText: string; description: string; environment?: string; color?: string; layout?: string; prompt?: string; referenceAssetId?: string };
 export type DramaShot = { id: string; number: string; order?: number; archived?: boolean; sceneId: string; characterIds?: string[]; startTime?: string; endTime?: string; description: string; action: string; expression: string; size: string; angle: string; composition?: string; movement: string; dialogue: string; sound: string; duration: number; imagePrompt?: string; videoPrompt?: string; referencePath: string; firstFrameAssetId?: string; lastFrameAssetId?: string; referenceAssetIds?: string[]; aspectRatio?: string; productionStatus?: DramaProductionStatus; reviewStatus?: DramaStatus; status: DramaStatus };
+export type DramaVideoSegment = { id: string; name: string; shotIds: string[]; referenceAssetIds: string[] };
 export type DramaCharacterLook = { id: string; name: string; age?: string; appearance?: string; hairstyle?: string; outfit: string; visualFeatures?: string[]; prompt?: string; referencePath?: string; referenceAssetIds?: string[]; archived?: boolean; version: number };
 export type DramaCharacter = { id: string; archived?: boolean; name: string; description: string; appearance: string; age?: string; identity?: string; hairstyle?: string; outfit?: string; visualFeatures?: string[]; prompt?: string; referencePath: string; looks?: DramaCharacterLook[]; version: number };
 export type DramaAsset = { id: string; kind: "scene" | "prop" | "image"; name: string; description: string; referencePath: string; version: number;
@@ -79,6 +80,7 @@ function normalizeDramaProject(project: DramaProject) {
   for (const episode of project.episodes) {
     episode.scenes ??= [];
     episode.shots ??= [];
+    episode.videoSegments ??= [];
     const versions = project.scriptVersions[episode.id] ??= [];
     if (episode.scriptPath && !versions.some(item => item.path === episode.scriptPath)) {
       versions.push({ id: `legacy-${episode.id}-${episode.scriptVersion}`, version: episode.scriptVersion, path: episode.scriptPath, createdAt: project.updatedAt, status: episode.status ?? "草稿" });
@@ -572,6 +574,41 @@ export async function updateEpisode(files: DramaWorkspaceFiles, project: DramaPr
   await saveProjectSnapshot(files, snapshot, manifestPath);
   applyDramaProjectSnapshot(project, snapshot);
   return episode;
+}
+
+export async function createVideoSegment(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, input: { id?: string; name: string }, manifestPath: string) {
+  const name = input.name.trim();
+  if (!name || name.length > 500) throw new Error("视频片段名称必须为 1 至 500 个字符");
+  const snapshot = cloneProject(project);
+  const episode = snapshot.episodes.find(item => item.id === episodeId);
+  if (!episode) throw new Error("目标分集不存在");
+  episode.videoSegments ??= [];
+  const existing = episode.videoSegments.find(item => item.id === input.id || item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+  if (existing) {
+    if (input.id && existing.id !== input.id) throw new Error("同名视频片段已使用其他稳定 ID");
+    if (existing.name === name) return existing;
+    throw new Error("视频片段 ID 已存在且名称不同；请先查询后再修改");
+  }
+  if (snapshot.episodes.some(item => item.id !== episodeId && item.videoSegments?.some(segment => segment.id === input.id))) throw new Error("视频片段 ID 已被项目中的其他分集使用");
+  const segment: DramaVideoSegment = { id: input.id ?? crypto.randomUUID(), name, shotIds: [], referenceAssetIds: [] };
+  episode.videoSegments.push(segment);
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  applyDramaProjectSnapshot(project, snapshot);
+  return segment;
+}
+
+export async function updateVideoSegment(files: DramaWorkspaceFiles, project: DramaProject, episodeId: string, segmentId: string, patch: { name?: string }, manifestPath: string) {
+  const name = patch.name?.trim();
+  if (patch.name !== undefined && (!name || name.length > 500)) throw new Error("视频片段名称必须为 1 至 500 个字符");
+  const snapshot = cloneProject(project);
+  const episode = snapshot.episodes.find(item => item.id === episodeId);
+  const segment = episode?.videoSegments?.find(item => item.id === segmentId);
+  if (!segment) throw new Error("目标视频片段不存在或不属于指定分集");
+  if (name && episode?.videoSegments?.some(item => item.id !== segmentId && item.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error("当前分集中已存在同名视频片段");
+  if (name) segment.name = name;
+  await saveProjectSnapshot(files, snapshot, manifestPath);
+  applyDramaProjectSnapshot(project, snapshot);
+  return segment;
 }
 
 export async function updateDramaProject(files: DramaWorkspaceFiles, project: DramaProject, patch: Partial<Pick<DramaProject, "name" | "genre" | "style" | "storyOutline" | "targetEpisodes" | "targetDuration">>, manifestPath: string) {

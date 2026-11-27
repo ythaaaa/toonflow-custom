@@ -18,7 +18,7 @@
     <img v-if="previewUrl" class="nodeImage" :src="previewUrl" :alt="entity.title" />
     <p v-if="entity.description">{{ entity.description }}</p>
     <el-button v-if="binding" class="openEditorButton nodrag nopan" size="small" text type="primary" @click.stop="selectNode">
-      {{ binding.role === "script" ? "编辑剧本工作稿" : binding.role === "character" ? "编辑人物" : binding.role === "scene" ? "编辑场景" : binding.role === "gptImage" ? "打开 GPT 生图" : binding.role === "imageAsset" ? "查看图片素材" : "查看镜头与生图" }}
+      {{ binding.role === "script" ? "编辑剧本工作稿" : binding.role === "character" ? "编辑人物" : binding.role === "scene" ? "编辑场景" : binding.role === "gptImage" ? "打开 GPT 生图" : binding.role === "imageAsset" ? "查看参考图片" : binding.role === "videoSegment" ? "查看视频生成片段" : "查看镜头与生图" }}
     </el-button>
   </article>
 </template>
@@ -28,12 +28,13 @@ import { computed, inject, onScopeDispose, ref, watch } from "vue";
 import { Handle, Position, useVueFlow, type Connection, type GraphNode, type NodeProps } from "@vue-flow/core";
 import { isTypeCompatible, validateConnection, type NodeHandle } from "@toonflow/nodes-scaffold/runtime";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
-import { dramaCanvasStateKey, dramaCharacterDisplayName, readDramaCanvasBinding, resolveDramaCanvasRelation, type DramaCanvasRole } from "@/lib/dramaCanvas";
+import { dramaCanvasStateKey, dramaCharacterDisplayName, readDramaCanvasBinding, resolveDramaCanvasRelation, resolveDramaReferenceImage, type DramaCanvasRole } from "@/lib/dramaCanvas";
+import type { NodeOutputs } from "@toonflow/nodes-scaffold/runtime";
 
 const props = defineProps<NodeProps>();
 const flow = useVueFlow();
 const dramaCanvasState = inject(dramaCanvasStateKey);
-const data = computed(() => props.data as { label?: string; handles?: NodeHandle[]; dramaBinding?: unknown });
+const data = computed(() => props.data as { label?: string; handles?: NodeHandle[]; outputs?: NodeOutputs; dramaBinding?: unknown });
 const binding = computed(() => readDramaCanvasBinding(data.value));
 const handles = computed(() => Array.isArray(data.value.handles) ? data.value.handles : []);
 const targetHandles = computed(() => handles.value.filter(item => item.type === "target"));
@@ -46,9 +47,9 @@ const roleLabel = computed(() => {
     const version = currentProject?.scriptVersions[currentBinding.episodeId]?.find(item => item.id === currentBinding.scriptVersionId);
     return version?.status === "已确认" ? "正式剧本" : "剧本草稿";
   }
-  return ({ script: "剧本草稿", character: "人物", scene: "场景", shot: "镜头", gptImage: "GPT 会员生图", imageAsset: "图片素材" } satisfies Record<DramaCanvasRole, string>)[currentBinding?.role ?? "script"];
+  return ({ script: "剧本草稿", character: "人物", scene: "场景", shot: "镜头", gptImage: "GPT 会员生图", imageAsset: "图片素材", videoSegment: "视频生成片段" } satisfies Record<DramaCanvasRole, string>)[currentBinding?.role ?? "script"];
 });
-const entity = computed(() => {
+const entity = computed<{ title: string; description: string; imagePath: string; imageMimeType?: string }>(() => {
   const currentBinding = binding.value;
   const currentProject = dramaCanvasState?.value?.project;
   const episode = currentProject?.episodes.find(item => item.id === currentBinding?.episodeId);
@@ -74,9 +75,14 @@ const entity = computed(() => {
       ?? currentProject.assets.find(item => item.shotId === shot?.id && item.kind === "image");
     return { title: shot ? `${currentBinding.role === "gptImage" ? "GPT · " : ""}${shot.number}` : "镜头已不存在", description: shot ? [shot.size, shot.angle, shot.description].filter(Boolean).join(" · ") : "", imagePath: asset?.referencePath || "" };
   }
-  const asset = currentProject.assets.find(item => item.id === currentBinding.assetId);
-  return { title: asset?.name || "图片素材已不存在", description: asset?.description || "", imagePath: asset?.referencePath || "" };
+  const reference = currentBinding.assetId ? resolveDramaReferenceImage(currentProject, currentBinding.assetId) : undefined;
+  return { title: reference?.name || "图片素材已不存在", description: reference?.description || "", imagePath: reference?.referencePath || "", imageMimeType: reference?.mimeType };
 });
+watch(() => [entity.value.imagePath, entity.value.imageMimeType] as const, ([path, mimeType]) => {
+  const outputs = data.value.outputs ??= {};
+  if (path && mimeType) outputs.media = { dataType: "IMAGE", value: { url: path, mimeType } };
+  else delete outputs.media;
+}, { immediate: true });
 const previewUrl = ref("");
 let releasePreview: (() => void) | undefined;
 let previewRequest = 0;

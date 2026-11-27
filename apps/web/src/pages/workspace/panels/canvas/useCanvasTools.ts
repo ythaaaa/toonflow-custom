@@ -208,11 +208,21 @@ export function useCanvasTools(options: {
         const args = canvasSchemas.addNode.parse(request.args);
         const type = options.availableNodes.value.find(node => node.type === args.type);
         if (!type) throw new Error("节点类型未启用或尚未加载，请先查询 getCanvas");
-        const id = crypto.randomUUID();
-        flow.addNodes({ id, type: type.type, position: nodePosition(args.position), data: { label: args.label ?? type.label } });
+        const id = args.nodeId ?? crypto.randomUUID();
+        const existing = flow.findNode(id);
+        const position = nodePosition(args.position);
+        const label = args.label ?? type.label;
+        if (existing) {
+          const existingLabel = existing.data.label ?? existing.label;
+          if (existing.type !== type.type || existingLabel !== label || existing.position.x !== position.x || existing.position.y !== position.y) {
+            throw new Error(`稳定节点 ID 已被不同内容占用：${id}`);
+          }
+          return { ...nodeInfo(id), deduplicated: true };
+        }
+        flow.addNodes({ id, type: type.type, position, data: { label } });
         await nextTick();
         signal.throwIfAborted();
-        return nodeInfo(id);
+        return { ...nodeInfo(id), deduplicated: false };
       }
       case "deleteNodes": {
         const { nodeIds } = canvasSchemas.deleteNodes.parse(request.args);
@@ -262,7 +272,8 @@ export function useCanvasTools(options: {
           const sourceBinding = readDramaCanvasBinding(sourceNode.data);
           const targetBinding = readDramaCanvasBinding(targetNode.data);
           const dramaRelation = resolveDramaCanvasRelation(sourceNode, targetNode);
-          if ((sourceBinding || targetBinding) && !dramaRelation) throw new Error("短剧节点只支持有效的剧本、场景、人物、镜头和图片关系");
+          const videoReference = !sourceBinding && targetBinding?.role === "videoSegment" && connection.targetHandle === "in";
+          if ((sourceBinding || targetBinding) && !dramaRelation && !videoReference) throw new Error("短剧节点只支持有效的业务关系；视频片段允许从普通媒体节点接收生成参考");
           const existing = edges.find(edge => edge.source === connection.source && edge.target === connection.target
             && edge.sourceHandle === connection.sourceHandle && edge.targetHandle === connection.targetHandle);
           if (existing) return { id: existing.id, connection, isNew: false, existing, dramaRelation };

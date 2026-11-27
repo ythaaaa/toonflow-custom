@@ -7,6 +7,7 @@ import { realpath, stat, mkdir, readdir, readFile } from "@toonflow/file";
 import { z } from "zod";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { CanvasContext } from "@toonflow/tools-scaffold/runtime";
+import { canvasOperations } from "@toonflow/tool-canvas/runtime";
 import type { McpTool } from "@toonflow/mcp";
 import { createAgentTools } from "@/agent/tools";
 import { run as runAgent } from "@/agent";
@@ -23,10 +24,10 @@ import { thinkingLevels } from "@/lib/modelReasoning";
 import {
   createCharacter as createDramaCharacter, createCharacterLook as createDramaCharacterLook,
   createDramaAsset, createDramaProject, createEpisode as createDramaEpisode, createScene as createDramaScene,
-  createSeason as createDramaSeason, createShot as createDramaShot, listDramaProjects as listDramaProjectFiles,
+  createSeason as createDramaSeason, createShot as createDramaShot, createVideoSegment as createDramaVideoSegment, listDramaProjects as listDramaProjectFiles,
   readEpisodeDraftSnapshot, saveDramaProject, saveEpisodeDraft, saveEpisodeScriptVersion, updateCharacter as updateDramaCharacter,
   updateCharacterLook as updateDramaCharacterLook, updateDramaProject, updateDramaAsset, updateScriptReview,
-  updateEpisode as updateDramaEpisode, updateScene as updateDramaScene, updateShot as updateDramaShot,
+  updateEpisode as updateDramaEpisode, updateScene as updateDramaScene, updateShot as updateDramaShot, updateVideoSegment as updateDramaVideoSegment,
   type DramaAsset, type DramaEpisode, type DramaProject, type DramaWorkspaceFiles,
 } from "@toonflow/drama-workspace";
 
@@ -108,6 +109,7 @@ function wrapTool(name: string, description: string, schema: object, execute: (a
 
 const uiSchemas = {
   openProject: z.strictObject({ directory: z.string().min(1).max(4096) }),
+  openDramaCanvas: z.strictObject({ projectId: z.string().min(1).max(256), episodeId: z.string().min(1).max(256) }),
   switchPanel: z.strictObject({ panel: z.enum(["canvas", "document"]) }),
   getDocument: z.strictObject({}),
   openDocument: z.strictObject({ path: z.string().max(4096).optional(), canvasPath: z.string().max(4096).optional(), nodeId: z.string().max(256).optional(), handleId: z.string().max(256).optional() }),
@@ -117,6 +119,7 @@ const uiSchemas = {
 };
 const uiDescriptions: Record<keyof typeof uiSchemas, string> = {
   openProject: "在目标 Toonflow 页面打开已有工作目录，并等待工作区就绪；操作前获取 getAppState 的 connectionId。",
+  openDramaCanvas: "按项目 ID 与剧集 ID 创建或打开短剧原生画布，并从短剧项目数据同步业务节点及关系；目标必须属于当前工作区。",
   switchPanel: "切换工作区的 canvas 画布或 document 文档面板，先保存当前编辑。",
   getDocument: "读取当前文档内容和选择状态。writeDocument 必须携带本次读取的 text 作为 expectedText。",
   openDocument: "打开工作区中的文档文件(path)，或画布中的文本节点(canvasPath、nodeId，可选handleId)。",
@@ -308,6 +311,22 @@ function getDramaTools(): McpTool[] {
   });
   add("getEpisodeScenes", "读取指定剧集的场景列表。", dramaEpisodeSchema, async ({ projectId, episodeId }, directory) => requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId).scenes);
   add("getEpisodeShots", "读取指定剧集的镜头列表，包含提示词、时长、画幅及素材关联字段。", dramaEpisodeSchema, async ({ projectId, episodeId }, directory) => requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId).shots);
+  add("getEpisodeVideoSegments", "读取指定剧集的视频生成片段及其导演镜头、参考图片关联。", dramaEpisodeSchema, async ({ projectId, episodeId }, directory) => requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId).videoSegments ?? []);
+  add("createVideoSegment", "创建与剧集绑定的视频生成片段；多个导演镜头可连接到同一片段，稳定 videoSegmentId 可安全重试。创建后用 openDramaCanvas 同步到原生视频生成节点。", dramaEpisodeSchema.extend({ videoSegmentId: z.uuid().optional(), name: z.string().trim().min(1).max(500) }), async ({ projectId, episodeId, videoSegmentId, name }, directory) => withDramaWriteLock(directory, async () => {
+    const data = await loadDramaProject(directory, projectId);
+    const before = requireEpisode(data.project, episodeId).videoSegments ?? [];
+    const segment = await createDramaVideoSegment(data.files, data.project, episodeId, { id: videoSegmentId, name }, data.manifestPath);
+    const saved = requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId).videoSegments?.find(item => item.id === segment.id);
+    if (!saved || JSON.stringify(saved) !== JSON.stringify(segment)) throw new Error("视频片段写入后回读校验失败");
+    return { segment: saved, deduplicated: before.some(item => item.id === saved.id), verified: true };
+  }));
+  add("updateVideoSegment", "按稳定 videoSegmentId 更新当前剧集中的视频片段名称；导演镜头和参考图关系通过原生画布连线维护。", dramaEpisodeSchema.extend({ videoSegmentId: z.string().min(1).max(256), name: z.string().trim().min(1).max(500) }), async ({ projectId, episodeId, videoSegmentId, name }, directory) => withDramaWriteLock(directory, async () => {
+    const data = await loadDramaProject(directory, projectId);
+    const segment = await updateDramaVideoSegment(data.files, data.project, episodeId, videoSegmentId, { name }, data.manifestPath);
+    const saved = requireEpisode((await loadDramaProject(directory, projectId)).project, episodeId).videoSegments?.find(item => item.id === videoSegmentId);
+    if (!saved || JSON.stringify(saved) !== JSON.stringify(segment)) throw new Error("视频片段更新后回读校验失败");
+    return { segment: saved, verified: true };
+  }));
   add("getDramaAssets", "读取当前项目的素材与人物；可按资产 ID、类型和归属过滤。", dramaProjectSchema.extend({
     assetId: z.string().max(256).optional(), kind: z.enum(["scene", "prop", "image"]).optional(), characterId: z.string().max(256).optional(),
     episodeId: z.string().max(256).optional(), sceneId: z.string().max(256).optional(), shotId: z.string().max(256).optional(),
@@ -458,7 +477,7 @@ function getDramaTools(): McpTool[] {
     if (!saved || JSON.stringify(saved) !== JSON.stringify(shot)) throw new Error("镜头写入后回读校验失败");
     return { shot: saved, verified: true };
   }));
-  const batchSchema = z.strictObject({ operations: z.array(z.strictObject({ tool: z.enum(["saveEpisodeDraft", "createScriptVersion", "createSeason", "createEpisode", "updateDramaProject", "updateEpisode", "createCharacter", "updateCharacter", "createCharacterLook", "updateCharacterLook", "createDramaAsset", "updateDramaAsset", "createScene", "updateScene", "createShot", "updateShot"]), args: z.record(z.string(), z.unknown()) })).min(1).max(25) });
+  const batchSchema = z.strictObject({ operations: z.array(z.strictObject({ tool: z.enum(["saveEpisodeDraft", "createScriptVersion", "createSeason", "createEpisode", "updateDramaProject", "updateEpisode", "createCharacter", "updateCharacter", "createCharacterLook", "updateCharacterLook", "createDramaAsset", "updateDramaAsset", "createScene", "updateScene", "createShot", "updateShot", "createVideoSegment", "updateVideoSegment"]), args: z.record(z.string(), z.unknown()) })).min(1).max(25) });
   tools.push(wrapTool("applyDramaBatch", "在同一工作区、同一项目内顺序执行最多25项写操作；失败后停止并返回已完成、失败、未执行项，重试可复用创建请求中的稳定 ID。每项单独读回核验，不提供跨文件事务回滚；批处理不含正式剧本确认操作。", z.toJSONSchema(batchSchema), async (raw, target, signal) => {
     const { operations } = batchSchema.parse(raw);
     const directory = await resolveDramaWorkspace(target);
@@ -574,6 +593,15 @@ export async function getMcpTools(): Promise<McpTool[]> {
         get(value, key) { if (Reflect.has(value, key)) return Reflect.get(value, key); throw new Error(t`MCP 不提供内置 Agent 会话能力：${String(key)}`); },
       }) as unknown as ExtensionContext;
       return current.execute(crypto.randomUUID(), args, signal, undefined, context);
+    }));
+  }
+  for (const operation of canvasOperations) {
+    if (tools.some(tool => tool.name === operation.name)) continue;
+    tools.push(wrapTool(operation.name, operation.description, z.toJSONSchema(operation.parameters), async (input, target, signal) => {
+      const args = operation.parameters.parse(input);
+      const { connection, directory } = await resolveTarget(target);
+      if (!connection) throw new Error("请先打开 Toonflow 桌面或网页");
+      return callControl(connection.id, operation.name, { ...args }, signal, directory);
     }));
   }
   tools.push(...getDramaTools());

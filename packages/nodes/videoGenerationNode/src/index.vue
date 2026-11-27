@@ -137,6 +137,7 @@ defineOptions({
   inheritAttrs: false,
   icon: IconCameraAi,
   handles: [
+    { id: "directorShots", type: "target", dataType: "DRAMA_SHOT", label: "导演镜头（短剧）" },
     { id: "in", type: "target", dataType: ["IMAGE", "VIDEO", "AUDIO", "STRING"], label: "图片、视频、音频、文本输入" },
     { id: "video", type: "source", dataType: "VIDEO", label: "视频输出" },
   ] satisfies NodeHandle[],
